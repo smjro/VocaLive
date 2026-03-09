@@ -1,522 +1,184 @@
 # AGENT.md
 
-## Project overview
+## Project snapshot
 
-This repository is a real-time voice conversation system for talking with an AI.
+VocaLive is a local, adapter-based voice conversation runtime.
 
-Primary conversation flow:
+Current entry point:
 
-1. Human speaks
-2. STT converts speech to text
-3. Gemini 2.5 Flash generates a response
-4. TTS synthesizes voice
-5. Audio is played back immediately
-6. Repeat with low latency
+- `src/vocalive/main.py`
 
-Current intended components mentioned by the owner:
+Current runtime modes:
 
-- STT: configurable speech-to-text engine
-- LLM: Gemini 2.5 Flash
-- TTS: AivisSpeech
-- Runtime target: local PC, real-time conversational use
-- Main goal: natural, responsive, low-latency voice interaction
+- `stdin` shell for local development and provider wiring checks
+- `microphone` capture via `sounddevice` with local utterance detection
 
-Important:
-- The repository may evolve and component choices may change.
-- Do not hardcode assumptions that make STT/TTS/LLM vendors impossible to swap.
-- Prefer an adapter-based architecture.
+Current default assembly:
 
----
+- STT: `MockSpeechToTextEngine`
+- LLM: `EchoLanguageModel`
+- TTS: `MockTextToSpeechEngine`
+- Output: `MemoryAudioOutput`
 
-## Mission for Codex
+Current optional real adapters:
 
-When working on this repository, optimize for the following in order:
+- STT: `MoonshineSpeechToTextEngine`
+- LLM: `GeminiLanguageModel`
+- TTS: `AivisSpeechTextToSpeechEngine`
+- Output: `SpeakerAudioOutput`
 
-1. **Low latency**
-2. **Reliability during long-running sessions**
-3. **Simple debuggability**
-4. **Clear module boundaries**
-5. **Ease of swapping STT / TTS / LLM providers**
-6. **Maintainable code over clever code**
+Current hard constraints in the shipped app assembly:
 
-This is not a prototype-only repo.
-Implement changes as if this project will continue to grow.
+- `VOCALIVE_INPUT_PROVIDER=microphone` requires a real STT adapter, currently `moonshine`
+- `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- speaker playback uses `afplay` by default on macOS unless `VOCALIVE_SPEAKER_COMMAND` is set
 
----
+## Current behavior that changes must preserve
 
-## Product goals
+The repository is not a blank prototype. These behaviors already exist and should stay stable unless the task explicitly changes them:
 
-The desired user experience is:
+1. New utterances interrupt the currently active turn.
+2. The ingress queue is bounded and overflow behavior is explicit.
+3. Microphone speech start can interrupt stale playback before end-of-turn emission.
+4. Assistant responses are split into sentence-sized chunks for playback.
+5. TTS for the next sentence is prefetched while the current sentence is playing.
+6. User messages are committed to session history after STT.
+7. Assistant messages are committed only after playback completes.
+8. Interrupted assistant replies do not become committed history.
+9. Structured logs and per-stage latency metrics are emitted around the pipeline.
 
-- The AI responds quickly enough to feel conversational
-- Long sessions do not degrade badly over time
-- Audio interruptions, backlog, and queue explosions are controlled
-- Failures are visible and recoverable
-- Individual components can be restarted or replaced independently
-- Logs are sufficient to diagnose latency and quality issues
+## Working priorities
 
----
+Optimize for these in order:
 
-## Non-goals
+1. Low latency for live conversation
+2. Correct interruption and cancellation behavior
+3. Long-session stability
+4. Clear adapter boundaries
+5. Debuggability and observability
+6. Small, maintainable changes over clever rewrites
 
-Unless explicitly requested, do not:
+## Architecture guardrails
 
-- Add heavy frameworks without strong reason
-- Introduce complex distributed infrastructure
-- Add cloud dependencies beyond the required model providers
-- Rewrite the whole project when a local improvement is sufficient
-- Optimize prematurely at the cost of readability
-- Change public behavior drastically without documenting it
+Keep these concerns separated:
 
----
-
-## Core architectural principles
-
-### 1. Keep modules separated
-
-Structure the code so these concerns remain isolated:
-
-- audio input capture
-- VAD / turn detection
-- STT adapter
-- conversation/session state
-- LLM adapter
-- TTS adapter
-- audio output playback
-- orchestration / pipeline control
-- metrics / logging
+- audio input and device selection
+- utterance detection / turn detection
+- STT adapters
+- conversation session state
+- LLM adapters
+- TTS adapters
+- audio output / playback
+- orchestration and interruption control
 - configuration
+- logging and metrics
 
-### 2. Prefer adapters over vendor-specific logic
-
-Use interfaces or abstract base classes where appropriate.
-
-Examples:
-
-- `SpeechToTextEngine`
-- `LanguageModel`
-- `TextToSpeechEngine`
-- `AudioInput`
-- `AudioOutput`
-
-Vendor-specific SDK logic should stay inside adapter modules.
-
-### 3. Design for real-time flow, not batch flow
-
-Assume the app is long-running and interactive.
-Prioritize:
-
-- streaming where possible
-- bounded queues
-- cancellation support
-- interruption handling
-- backpressure
-- partial output support when feasible
-
-### 4. Make latency observable
-
-Every major stage should be measurable.
-
-Track at least:
-
-- microphone capture start/end
-- utterance end detection time
-- STT start/end
-- LLM request start/first token/end
-- TTS request start/first audio/end
-- playback start/end
-- total turn latency
-
-If a metrics system does not exist yet, add lightweight structured logging.
-
----
-
-## Preferred repository direction
-
-Codex should guide the project toward this shape if practical:
-
-```text
-src/
-  audio/
-    input.py
-    output.py
-    vad.py
-    devices.py
-  stt/
-    base.py
-    <provider>.py
-  llm/
-    base.py
-    gemini.py
-  tts/
-    base.py
-    aivis.py
-  pipeline/
-    orchestrator.py
-    session.py
-    queues.py
-    interruption.py
-  config/
-    settings.py
-  util/
-    logging.py
-    metrics.py
-    retry.py
-    time.py
-  main.py
-
-tests/
-  unit/
-  integration/
-
-This exact layout is not mandatory, but separation of concerns is.
-
-⸻
-
-Coding standards
-
-General
-	•	Prefer Python 3.11+ style if the repo allows it
-	•	Use type hints on all new or modified public functions
-	•	Write small functions with clear responsibilities
-	•	Avoid giant files and giant classes
-	•	Avoid hidden global state
-	•	Use dependency injection where practical
-	•	Prefer explicit configuration over magic constants
-
-Readability
-	•	Write code for future maintenance
-	•	Use clear names, not abbreviations unless standard
-	•	Add comments only where the intent is non-obvious
-	•	Do not add decorative comments
-	•	Keep control flow straightforward
-
-Error handling
-	•	Fail loudly in development
-	•	Fail gracefully in runtime paths where recovery is possible
-	•	Never silently swallow exceptions unless explicitly justified
-	•	Include context in raised/logged errors
-	•	Distinguish retryable vs non-retryable failures
-
-Async/concurrency
-
-If the project uses async code:
-	•	Stay consistent with the existing async model
-	•	Do not mix threading/async/processes unnecessarily
-	•	Be careful with blocking SDK calls inside async code
-	•	Offload blocking work explicitly when needed
-	•	Ensure shutdown and cancellation are handled cleanly
-
-If the project is sync-based:
-	•	Do not introduce async casually
-	•	Only introduce concurrency where it clearly improves latency or isolation
-
-⸻
-
-Audio pipeline requirements
-
-This project is audio-first. Protect responsiveness.
-
-Must-haves
-	•	bounded queues for audio/text tasks
-	•	queue overflow strategy must be explicit
-	•	interruption/cancel support for stale responses
-	•	prevention of unbounded memory growth
-	•	clear ownership of audio resources
-	•	clean release of microphone/speaker handles
-
-Strongly preferred
-	•	VAD or turn-end detection abstraction
-	•	ability to stop TTS playback when a new user turn starts
-	•	optional streaming response path
-	•	optional partial transcript handling
-
-Avoid
-	•	storing raw audio forever in memory
-	•	letting old TTS continue after user interruption
-	•	single giant loop with all responsibilities mixed together
-
-⸻
-
-Configuration rules
-
-Configuration should live outside business logic as much as possible.
-
-Use env vars, config files, or a typed settings layer for things like:
-	•	API keys
-	•	model names
-	•	audio device names or ids
-	•	sample rates
-	•	timeout values
-	•	retry counts
-	•	queue sizes
-	•	log levels
-	•	VAD thresholds
-	•	streaming toggles
-
-Do not scatter constants across many files.
-
-⸻
-
-Logging and metrics
-
-Use structured logs when possible.
-
-Every important operation should log enough to answer:
-	•	What happened?
-	•	How long did it take?
-	•	Which provider/component was involved?
-	•	Was the result partial, complete, cancelled, or failed?
-
-At minimum, log:
-	•	startup config summary without secrets
-	•	provider initialization
-	•	turn lifecycle
-	•	retries
-	•	cancellations
-	•	playback interruptions
-	•	provider failures
-	•	degraded mode fallbacks
-
-Never log secrets.
-
-⸻
+Do not move provider-specific HTTP or SDK logic into `pipeline/orchestrator.py`.
 
-Testing expectations
+Prefer extending the existing boundaries in:
 
-For non-trivial changes, add or update tests.
+- `src/vocalive/audio/`
+- `src/vocalive/stt/`
+- `src/vocalive/llm/`
+- `src/vocalive/tts/`
+- `src/vocalive/pipeline/`
+- `src/vocalive/config/settings.py`
 
-Favor these test types
-	1.	Unit tests
-	•	parsing
-	•	config loading
-	•	queue behavior
-	•	interruption logic
-	•	retry logic
-	•	adapter contract behavior
-	2.	Integration tests
-	•	end-to-end turn orchestration with mocked providers
-	•	timeout behavior
-	•	cancellation behavior
-	•	queue overflow handling
-
-Testing rules
-	•	Do not require real cloud APIs in normal tests
-	•	Mock provider SDK/network calls
-	•	Keep tests deterministic
-	•	Add regression tests for bugs you fix
-
-⸻
-
-Performance guidance
+## Configuration rules
 
-When improving performance, prefer this order:
-	1.	remove redundant work
-	2.	reduce blocking points
-	3.	stream results earlier
-	4.	bound queues and stale work
-	5.	reduce serialization/copying
-	6.	optimize hot paths only after measuring
+Runtime configuration is environment-driven through `AppSettings.from_env()`.
 
-Do not claim performance improvement without either:
-	•	measurement, or
-	•	a very obvious architectural reason
+When adding or changing behavior:
 
-If you change latency-sensitive code, add timing logs or benchmarks where reasonable.
+- add a typed setting instead of scattering constants
+- normalize provider aliases in `settings.py` if a new alias is meant to be supported
+- keep defaults aligned with the actual local development path
+- document any new compatibility constraint between providers
 
-⸻
+If a config name, default, or meaning changes, update:
 
-Long-session stability guidance
+- `README.md`
+- `docs/development.md`
+- any architecture text affected by the behavior change
 
-The owner specifically cares about degradation over long runs.
+## Provider rules
 
-When touching long-lived flows, check for:
-	•	memory leaks
-	•	queue buildup
-	•	unreleased audio buffers
-	•	repeated model/session reinitialization
-	•	reconnection behavior
-	•	task accumulation
-	•	duplicated callbacks/listeners
-	•	file descriptor / handle leaks
+Adapters should remain swappable.
 
-Favor designs that remain stable over hours, not just minutes.
+When adding a provider:
 
-⸻
+1. implement the relevant base interface
+2. keep all provider-specific logic inside the adapter module
+3. respect `CancellationToken` where the interface expects it
+4. wire the adapter in `build_orchestrator()` or a future assembly layer
+5. add tests for the control-flow changes introduced by the provider
 
-Dependency policy
+Do not document a provider as supported until it is actually wired from the current entry point.
 
-Before adding a new dependency, ask:
-	•	Is the standard library enough?
-	•	Is this dependency actively maintained?
-	•	Does it materially simplify the implementation?
-	•	Does it add startup/runtime overhead?
-	•	Does it complicate packaging on Windows?
+## Observability expectations
 
-Avoid adding dependencies for trivial helpers.
+The current pipeline records:
 
-⸻
+- metrics for `stt`, `llm`, `tts`, `playback`, and `turn_total`
+- structured logs for queue overflow, interruption, cancellation, transcription, response completion, and failures
 
-Documentation expectations
+If you add a new pipeline stage or a new long-lived resource, add:
 
-When making a meaningful architectural or behavior change, also update:
-	•	README
-	•	example config/env documentation
-	•	module docstrings if needed
-	•	migration notes if behavior changed
+- a log event for success and failure when appropriate
+- latency measurement if the stage affects responsiveness
+- clean startup and shutdown behavior
 
-Do not leave the repo in a state where the code and docs disagree.
+Never log secrets or raw credentials.
 
-⸻
+## Testing expectations
 
-Secrets and security
-	•	Never hardcode API keys or tokens
-	•	Never commit secrets
-	•	Use environment variables or secret loading mechanisms
-	•	Redact sensitive values from logs
-	•	Treat microphone/audio data as sensitive user data
-	•	Do not add telemetry without explicit request
+For non-trivial changes, update or add tests.
 
-⸻
+Current high-value areas already covered by unit tests:
 
-How to make changes
+- settings parsing and provider alias normalization
+- queue overflow behavior
+- microphone utterance accumulation and device resolution
+- Moonshine model resolution and transcript-hint behavior
+- Gemini payload shaping
+- Aivis speaker/style selection
+- orchestrator interruption, playback chunking, and session rules
+- structured logging serialization
 
-Implementation planning and progress tracking
+Add regression coverage when fixing bugs in latency-sensitive or cancellation-sensitive code.
 
-Before making non-trivial changes:
-	•	create a short implementation plan with concrete steps
-	•	make progress visible while working
-	•	update step status as work advances
-	•	note scope changes or newly discovered blockers
-	•	close the task by stating what is complete and what remains, if anything
+## Dependency policy
 
-For small changes, keep the plan lightweight, but still make progress explicit.
+Prefer the standard library unless a new dependency clearly improves the implementation.
 
-⸻
+Be conservative about adding packages that:
 
-When asked to implement something, follow this process:
-	1.	Understand the current architecture first
-	2.	Create a short implementation plan with explicit steps
-	3.	Track progress clearly and keep statuses updated while working
-	4.	Identify the smallest clean change that solves the problem
-	5.	Preserve working behavior unless change is requested
-	6.	Implement with clear module boundaries
-	7.	Add or update tests
-	8.	Update docs if behavior/config changes
-	9.	Summarize what changed, progress completed, and any tradeoffs
+- complicate packaging for local desktop use
+- introduce background services or heavy frameworks
+- make provider swapping harder
 
-When making multi-file changes, keep them coherent and minimal.
+## Current limitations
 
-⸻
+These are not implemented today and should not be described as already available:
 
-When fixing bugs
+- streaming partial STT results
+- streaming token output from the LLM
+- streaming audio output from TTS
+- echo cancellation / full-duplex coordination
+- persistent metrics export
+- separate restartable worker processes
+- generic retry/backoff infrastructure
 
-Always try to identify:
-	•	root cause
-	•	symptom
-	•	reproduction conditions
-	•	whether the bug is timing-related, state-related, or provider-related
+## Documentation contract
 
-Do not apply a band-aid fix if a small structural fix is possible.
+Keep docs aligned with repository reality.
 
-Add a regression test when practical.
+Update docs in the same change when you modify:
 
-⸻
+- startup flow or CLI behavior
+- environment variables or defaults
+- supported provider combinations
+- queue, interruption, or session semantics
+- architecture or module boundaries
 
-When implementing new providers
-
-For STT / LLM / TTS provider additions:
-	•	conform to existing adapter interfaces
-	•	keep provider-specific config isolated
-	•	normalize outputs into internal data structures
-	•	map provider errors into consistent internal exceptions if useful
-	•	document required env vars and model names
-	•	avoid leaking SDK-specific types outside the adapter
-
-⸻
-
-Definition of done
-
-A change is considered done when:
-	•	it solves the requested problem
-	•	code is understandable
-	•	logs/errors are sufficient
-	•	tests pass or are updated appropriately
-	•	docs/config examples are updated if needed
-	•	no obvious architectural damage was introduced
-
-⸻
-
-Preferred response style from Codex
-
-When proposing or applying changes, be:
-	•	concise
-	•	concrete
-	•	technically honest
-	•	explicit about tradeoffs
-	•	explicit about assumptions
-
-Do not give vague reassurance.
-Do not pretend something was verified if it was not.
-
-⸻
-
-Things Codex should proactively improve
-
-If relevant to the requested task, Codex may proactively improve:
-	•	missing type hints in touched code
-	•	poor error messages
-	•	missing timeout handling
-	•	missing cancellation hooks
-	•	queue bound enforcement
-	•	logging around latency-sensitive stages
-	•	docstrings for non-obvious interfaces
-	•	tests around touched behavior
-
-Keep scope reasonable.
-
-⸻
-
-Things Codex should not do without explicit request
-
-Do not do these unless asked:
-	•	large-scale renames across the whole repo
-	•	switching frameworks
-	•	replacing the entire concurrency model
-	•	changing all formatting tooling
-	•	moving every file to a new architecture at once
-	•	adding Docker/Kubernetes/CI from scratch unless clearly useful to the current task
-
-⸻
-
-If repository state is inconsistent
-
-If you notice contradictions between docs, code, and config:
-	1.	trust the running code path more than stale docs
-	2.	mention the inconsistency
-	3.	fix nearby documentation if part of the requested work
-	4.	avoid speculative refactors without evidence
-
-⸻
-
-Recommended internal priorities for this repository
-
-When in doubt, optimize for:
-	•	conversational responsiveness
-	•	clean interruption behavior
-	•	stable long-session operation
-	•	provider swappability
-	•	developer clarity
-
-⸻
-
-Maintainer intent summary
-
-This project is intended to become a practical real-time AI voice conversation system.
-Treat it like a maintainable product, not a throwaway demo.
-
-The most valuable improvements are the ones that:
-	•	reduce perceived latency
-	•	prevent degradation over time
-	•	make debugging easier
-	•	keep the architecture modular
+Future ideas are fine, but label them clearly as future work rather than current behavior.
