@@ -16,6 +16,7 @@ The current repository contains the core orchestration layer, mock providers for
 - Implemented: AivisSpeech TTS adapter via local HTTP API
 - Implemented: sentence-by-sentence TTS playback with background prefetch
 - Implemented: speaker playback via `afplay`
+- Implemented: microphone speech-start barge-in for stale reply cancellation
 - Implemented: unit tests for queue overflow and interruption behavior
 - Not implemented yet: streaming partial STT / LLM / TTS
 - Not implemented yet: echo cancellation for full-duplex mic + speaker use
@@ -67,6 +68,8 @@ device name from `python3 -c "import sounddevice as sd; print(sd.query_devices()
 If STT drops the beginning of a phrase, first increase `VOCALIVE_MIC_PRE_SPEECH_MS`.
 If it still cuts off while you are mid-sentence, then increase
 `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`.
+In microphone mode, VocaLive keeps capturing while the assistant is speaking and
+stops the active reply as soon as local speech crosses the configured threshold.
 
 The stdin shell can also exercise the Gemini and Aivis wiring without a microphone.
 When `VOCALIVE_STT_PROVIDER=moonshine`, typed shell input is reused as a transcript hint
@@ -134,6 +137,7 @@ Current provider support:
   Current default wiring sets Gemini 2.5 `thinkingBudget=0` to reduce response latency.
 - `aivis` uses the local AivisSpeech engine API at `http://127.0.0.1:10101` by default
 - `speaker` output plays synthesized `.wav` / `.aiff` audio through `afplay`
+- live microphone input can barge in on an active reply before the new turn is fully emitted
 - Provider names are normalized case-insensitively, so values such as `Moonshine Voice`
   and `Aivis Speech` resolve to the supported adapters
 

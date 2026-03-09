@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import inspect
 import importlib
 from abc import ABC, abstractmethod
 from collections import deque
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from vocalive.audio.devices import InputDeviceMatch, resolve_input_device
@@ -51,6 +53,7 @@ class UtteranceAccumulator:
         min_utterance_ms: float = 250.0,
         max_utterance_ms: float = 15_000.0,
         turn_detector: TurnDetector | None = None,
+        on_speech_start: Callable[[], None] | None = None,
     ) -> None:
         self.sample_rate_hz = sample_rate_hz
         self.channels = channels
@@ -61,6 +64,7 @@ class UtteranceAccumulator:
         self.min_utterance_ms = min_utterance_ms
         self.max_utterance_ms = max_utterance_ms
         self.turn_detector = turn_detector or FixedSilenceTurnDetector()
+        self.on_speech_start = on_speech_start
         self._buffer = bytearray()
         self._buffered_ms = 0.0
         self._preroll_chunks: deque[tuple[bytes, float]] = deque()
@@ -84,6 +88,8 @@ class UtteranceAccumulator:
         if not self._started:
             if measured_speech:
                 self._start_buffer_from_preroll()
+                if self.on_speech_start is not None:
+                    self.on_speech_start()
             else:
                 self._buffer_preroll_chunk(chunk, duration_ms)
                 return None
@@ -178,6 +184,8 @@ class MicrophoneAudioInput(AudioInput):
         self.frames_per_block = max(1, int(sample_rate_hz * block_duration_ms / 1000.0))
         self.device = device
         self.prefer_external_device = prefer_external_device
+        self._on_speech_start: Callable[[], Awaitable[None] | None] | None = None
+        self._background_tasks: set[asyncio.Future[Any]] = set()
         self._accumulator = UtteranceAccumulator(
             sample_rate_hz=sample_rate_hz,
             channels=channels,
@@ -188,6 +196,7 @@ class MicrophoneAudioInput(AudioInput):
             min_utterance_ms=min_utterance_ms,
             max_utterance_ms=max_utterance_ms,
             turn_detector=FixedSilenceTurnDetector(silence_threshold_ms=silence_threshold_ms),
+            on_speech_start=self._emit_speech_start,
         )
         self._stream: Any | None = None
         self._selected_device: InputDeviceMatch | None = None
@@ -213,15 +222,23 @@ class MicrophoneAudioInput(AudioInput):
         stream = self._stream
         self._stream = None
         if stream is None:
+            await self._wait_for_background_tasks()
             return
         await asyncio.to_thread(stream.stop)
         await asyncio.to_thread(stream.close)
+        await self._wait_for_background_tasks()
         if self._selected_device is not None:
             log_event(
                 logger,
                 "microphone_stream_closed",
                 device=self._selected_device.label,
             )
+
+    def set_speech_start_handler(
+        self,
+        handler: Callable[[], Awaitable[None] | None] | None,
+    ) -> None:
+        self._on_speech_start = handler
 
     @property
     def selected_device_label(self) -> str:
@@ -269,6 +286,35 @@ class MicrophoneAudioInput(AudioInput):
             # Preserve the chunk even when the backend reports an overrun.
             return bytes(chunk)
         return bytes(chunk)
+
+    async def _wait_for_background_tasks(self) -> None:
+        if not self._background_tasks:
+            return
+        await asyncio.gather(*tuple(self._background_tasks), return_exceptions=True)
+
+    def _emit_speech_start(self) -> None:
+        handler = self._on_speech_start
+        if handler is None:
+            return
+        result = handler()
+        if not inspect.isawaitable(result):
+            return
+        task = asyncio.ensure_future(result)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._finalize_background_task)
+
+    def _finalize_background_task(self, task: asyncio.Future[Any]) -> None:
+        self._background_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(
+                logger,
+                "microphone_speech_start_handler_failed",
+                error=str(exc),
+            )
 
 
 def _import_sounddevice() -> Any:

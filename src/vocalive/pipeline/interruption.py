@@ -35,9 +35,12 @@ class InterruptionController:
         self._current_token = token
         return token
 
-    def interrupt_active_turn(self) -> None:
+    def interrupt_active_turn(self) -> bool:
         if self._current_token is not None:
+            already_cancelled = self._current_token.is_cancelled()
             self._current_token.cancel()
+            return not already_cancelled
+        return False
 
     def clear_if_current(self, token: CancellationToken) -> None:
         if self._current_token is token:

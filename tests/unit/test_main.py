@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -13,7 +16,8 @@ from vocalive.audio.input import MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput
 from vocalive.config.settings import AppSettings, InputProvider, InputSettings
 from vocalive.llm.gemini import GeminiLanguageModel
-from vocalive.main import build_audio_input, build_orchestrator
+from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator
+from vocalive.models import AudioSegment
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
 
@@ -53,3 +57,55 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertFalse(audio_input.prefer_external_device)
         self.assertEqual(audio_input._accumulator.pre_speech_ms, 180.0)
         self.assertEqual(audio_input._accumulator.speech_hold_ms, 350.0)
+
+
+class _ScriptedMicrophoneInput(MicrophoneAudioInput):
+    def __init__(self, segments: list[AudioSegment | None]) -> None:
+        self._segments = list(segments)
+        self.speech_start_handler = None
+
+    def set_speech_start_handler(self, handler):  # type: ignore[override]
+        self.speech_start_handler = handler
+
+    async def start(self) -> str:
+        return "test microphone"
+
+    async def read(self) -> AudioSegment | None:
+        await asyncio.sleep(0)
+        return self._segments.pop(0) if self._segments else None
+
+
+class _RecordingOrchestrator:
+    def __init__(self) -> None:
+        self.submitted: list[str | None] = []
+        self.wait_for_idle_calls = 0
+
+    async def submit_utterance(self, segment: AudioSegment) -> bool:
+        self.submitted.append(segment.transcript_hint)
+        return True
+
+    async def handle_user_speech_start(self) -> None:
+        return None
+
+    async def wait_for_idle(self) -> None:
+        self.wait_for_idle_calls += 1
+
+
+class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_microphone_loop_keeps_reading_without_waiting_for_idle(self) -> None:
+        audio_input = _ScriptedMicrophoneInput(
+            [
+                AudioSegment.from_text("first"),
+                AudioSegment.from_text("second"),
+                None,
+            ]
+        )
+        orchestrator = _RecordingOrchestrator()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = await _run_microphone_loop(orchestrator, audio_input)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(orchestrator.submitted, ["first", "second"])
+        self.assertEqual(orchestrator.wait_for_idle_calls, 0)
+        self.assertIsNotNone(audio_input.speech_start_handler)

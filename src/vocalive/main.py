@@ -127,6 +127,7 @@ async def _run_microphone_loop(
     audio_input: AudioInput,
 ) -> int:
     if isinstance(audio_input, MicrophoneAudioInput):
+        audio_input.set_speech_start_handler(orchestrator.handle_user_speech_start)
         selected_device = await audio_input.start()
         print(f"VocaLive microphone mode. Using {selected_device}. Ctrl-C to exit.")
     else:
@@ -139,10 +140,6 @@ async def _run_microphone_loop(
         if not accepted:
             print("assistant> queue full, utterance dropped")
             continue
-        await orchestrator.wait_for_idle()
-        message = orchestrator.session.last_assistant_message()
-        if message is not None:
-            print(f"assistant> {message.content}")
 
 
 def main() -> int:

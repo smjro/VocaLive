@@ -26,7 +26,9 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local silence detection.
 - `VOCALIVE_MIC_DEVICE=external` forces VocaLive to use a connected headset-like external mic.
 - `/quit`, `quit`, and `exit` stop the stdin shell.
-- Assistant output is printed after the orchestrator becomes idle in both modes.
+- The stdin shell prints assistant output after the orchestrator becomes idle.
+- The microphone path keeps reading while the assistant is speaking so local speech
+  onset can stop stale playback immediately.
 - The stdin shell sets `AudioSegment.transcript_hint`, so `moonshine`-selected configs can
   still exercise Gemini and Aivis wiring before switching to live microphone capture.
 

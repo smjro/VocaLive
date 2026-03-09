@@ -69,6 +69,8 @@ The pipeline is built around a bounded ingress queue.
 - Queue capacity is configured through `QueueSettings.ingress_maxsize`.
 - Overflow policy is explicit: `drop_oldest` or `reject_new`.
 - Every new utterance interrupts the currently active turn.
+- In microphone mode, local speech onset can interrupt the active turn before
+  silence-based end-of-turn detection finishes emitting the new utterance.
 - Playback receives a cancellation token so stale speech can stop quickly.
 - Assistant responses are split into sentence-sized playback chunks when possible.
 - While one synthesized sentence is playing, the orchestrator prepares the next one in the background.
@@ -102,6 +104,7 @@ Structured log events are emitted for:
 - transcription completion
 - response completion
 - queue overflow
+- turn interruption request
 - turn cancellation
 - turn failure
 

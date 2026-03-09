@@ -9,7 +9,7 @@ from math import ceil
 from pathlib import Path
 
 from vocalive.models import SynthesizedSpeech
-from vocalive.pipeline.interruption import CancellationToken
+from vocalive.pipeline.interruption import CancellationToken, TurnCancelledError
 
 
 class AudioOutput(ABC):
@@ -41,11 +41,15 @@ class MemoryAudioOutput(AudioOutput):
     ) -> None:
         self.started_texts.append(speech.text)
         chunk_count = max(1, ceil(len(speech.audio) / self.chunk_size_bytes))
-        for _ in range(chunk_count):
-            if cancellation is not None:
-                cancellation.raise_if_cancelled()
-            if self.chunk_delay_seconds > 0:
-                await asyncio.sleep(self.chunk_delay_seconds)
+        try:
+            for _ in range(chunk_count):
+                if cancellation is not None:
+                    cancellation.raise_if_cancelled()
+                if self.chunk_delay_seconds > 0:
+                    await asyncio.sleep(self.chunk_delay_seconds)
+        except TurnCancelledError:
+            self.interrupted_texts.append(speech.text)
+            raise
         self.completed_texts.append(speech.text)
 
     async def stop(self) -> None:

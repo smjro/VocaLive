@@ -67,6 +67,8 @@ class ConversationOrchestrator:
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
+        self._active_context: TurnContext | None = None
+        self._active_stage: str | None = None
 
     async def start(self) -> None:
         if self._worker_task is not None:
@@ -74,8 +76,7 @@ class ConversationOrchestrator:
         self._worker_task = asyncio.create_task(self._run(), name="vocalive-orchestrator")
 
     async def stop(self) -> None:
-        self._interruptions.interrupt_active_turn()
-        await self.audio_output.stop()
+        await self._interrupt_active_turn(reason="shutdown", force_stop_audio=True)
         worker_task = self._worker_task
         self._worker_task = None
         if worker_task is None:
@@ -88,8 +89,7 @@ class ConversationOrchestrator:
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
         self._idle_event.clear()
-        self._interruptions.interrupt_active_turn()
-        await self.audio_output.stop()
+        await self._interrupt_active_turn(reason="utterance_submitted")
         accepted = await self._queue.put(segment)
         if not accepted:
             log_event(
@@ -104,6 +104,9 @@ class ConversationOrchestrator:
             return False
         return True
 
+    async def handle_user_speech_start(self) -> None:
+        await self._interrupt_active_turn(reason="speech_started")
+
     async def wait_for_idle(self) -> None:
         await self._idle_event.wait()
 
@@ -116,6 +119,8 @@ class ConversationOrchestrator:
                 turn_id=self._turn_counter,
             )
             cancellation = self._interruptions.begin_turn()
+            self._active_context = context
+            self._active_stage = None
             try:
                 await self._process_turn(segment=segment, context=context, cancellation=cancellation)
             except TurnCancelledError:
@@ -134,6 +139,9 @@ class ConversationOrchestrator:
                     error=str(exc),
                 )
             finally:
+                if self._active_context == context:
+                    self._active_context = None
+                    self._active_stage = None
                 self._interruptions.clear_if_current(cancellation)
                 self._queue.task_done()
                 if self._queue.empty() and not self._interruptions.has_active_turn:
@@ -146,6 +154,7 @@ class ConversationOrchestrator:
         cancellation: CancellationToken,
     ) -> None:
         turn_started_ms = monotonic_ms()
+        self._active_stage = "stt"
         with timed_stage(self.metrics, "stt", context):
             transcription = await self.stt_engine.transcribe(segment, context, cancellation=cancellation)
         log_event(
@@ -164,6 +173,7 @@ class ConversationOrchestrator:
                 conversation_language=transcription.language or self.settings.conversation.language
             ),
         )
+        self._active_stage = "llm"
         with timed_stage(self.metrics, "llm", context):
             response = await self.language_model.generate(request, cancellation=cancellation)
         log_event(
@@ -175,9 +185,11 @@ class ConversationOrchestrator:
             llm_provider=response.provider,
         )
 
+        self._active_stage = "tts"
         await self._play_response(response=response, context=context, cancellation=cancellation)
 
         self.session.append_assistant_message(response.text)
+        self._active_stage = None
         self.metrics.record_duration(
             stage="turn_total",
             duration_ms=monotonic_ms() - turn_started_ms,
@@ -203,6 +215,7 @@ class ConversationOrchestrator:
             for index, _ in enumerate(chunks):
                 cancellation.raise_if_cancelled()
                 assert pending_chunk is not None
+                self._active_stage = "tts"
                 synthesized_chunk = await pending_chunk
                 pending_chunk = None
                 tts_duration_ms += synthesized_chunk.duration_ms
@@ -217,6 +230,7 @@ class ConversationOrchestrator:
                         name=f"vocalive-tts-{context.turn_id}-{next_index}",
                     )
                 playback_started_ms = monotonic_ms()
+                self._active_stage = "playback"
                 await self.audio_output.play(synthesized_chunk.speech, cancellation=cancellation)
                 playback_duration_ms += monotonic_ms() - playback_started_ms
         finally:
@@ -231,6 +245,22 @@ class ConversationOrchestrator:
                 duration_ms=playback_duration_ms,
                 context=context,
             )
+
+    async def _interrupt_active_turn(self, reason: str, force_stop_audio: bool = False) -> None:
+        interrupted_now = self._interruptions.interrupt_active_turn()
+        if interrupted_now or force_stop_audio:
+            await self.audio_output.stop()
+        active_context = self._active_context
+        if not interrupted_now or active_context is None:
+            return
+        log_event(
+            self.logger,
+            "turn_interrupted",
+            session_id=active_context.session_id,
+            turn_id=active_context.turn_id,
+            stage=self._active_stage,
+            reason=reason,
+        )
 
     async def _synthesize_chunk(
         self,

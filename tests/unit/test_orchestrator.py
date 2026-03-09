@@ -152,6 +152,28 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Assistant: first", output.started_texts)
         self.assertIn("Assistant: second", output.completed_texts)
 
+    async def test_user_speech_start_interrupts_existing_turn_before_submit(self) -> None:
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        self.orchestrator.audio_output = output
+        self.orchestrator.tts_engine = MockTextToSpeechEngine(delay_seconds=0.0)
+
+        await self.orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        await self.orchestrator.handle_user_speech_start()
+        await self._wait_for(lambda: output.interrupted_texts == ["Assistant: first"])
+
+        await self.orchestrator.submit_utterance(AudioSegment.from_text("second"))
+        await self.orchestrator.wait_for_idle()
+
+        self.assertEqual(output.stop_calls, 1)
+        self.assertNotIn("Assistant: first", output.completed_texts)
+        self.assertIn("Assistant: second", output.completed_texts)
+        self.assertEqual(
+            [message.content for message in self.orchestrator.session.snapshot()],
+            ["first", "second", "Assistant: second"],
+        )
+
     async def test_conversation_language_instruction_is_included_for_llm(self) -> None:
         language_model = CapturingLanguageModel()
         orchestrator = ConversationOrchestrator(

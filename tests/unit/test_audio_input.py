@@ -76,6 +76,26 @@ class UtteranceAccumulatorTests(unittest.TestCase):
         self.assertFalse(segment.pcm.startswith(older_prefix))
         self.assertTrue(segment.pcm.startswith(latest_prefix + voiced_chunk))
 
+    def test_calls_speech_start_callback_once_per_utterance(self) -> None:
+        started: list[str] = []
+        accumulator = UtteranceAccumulator(
+            sample_rate_hz=1_000,
+            speech_threshold=0.01,
+            speech_hold_ms=0.0,
+            min_utterance_ms=100.0,
+            turn_detector=FixedSilenceTurnDetector(silence_threshold_ms=100.0),
+            on_speech_start=lambda: started.append("speech"),
+        )
+
+        self.assertIsNone(accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=2_000)))
+        self.assertEqual(started, ["speech"])
+        self.assertIsNone(accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=2_000)))
+        self.assertEqual(started, ["speech"])
+        segment = accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=0))
+
+        self.assertIsNotNone(segment)
+        self.assertEqual(started, ["speech"])
+
     def test_emits_after_detected_silence(self) -> None:
         accumulator = UtteranceAccumulator(
             sample_rate_hz=16_000,
