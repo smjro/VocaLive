@@ -32,8 +32,10 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
 - microphone mode currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
-- `VOCALIVE_OVERLAY_ENABLED=true` starts a local browser overlay that shows the built-in character and live captions
+- `VOCALIVE_OVERLAY_ENABLED=true` starts a local transparent browser overlay that shows the character and assistant speech text
 - when `VOCALIVE_OVERLAY_AUTO_OPEN=true`, startup asks the system browser to open the overlay automatically
+- the overlay shows captions only while audio is actively playing and clears them on completion or interruption
+- place custom character art at `src/vocalive/ui/assets/character.png`; when the file is missing the built-in vector character is used
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking, so speech onset can stop stale playback immediately
@@ -68,12 +70,12 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | `gemini` is supported; aliases such as `google gemini` are accepted |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` is supported; aliases such as `aivis speech` are accepted |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
-| `VOCALIVE_OVERLAY_ENABLED` | `false` | Starts the local browser overlay with live captions |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Starts the local transparent browser overlay with speech-only captions |
 | `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Bind host/interface for the overlay server |
 | `VOCALIVE_OVERLAY_PORT` | `8765` | Bind port for the overlay server |
 | `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Opens the overlay page in the default browser on startup |
 | `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title |
-| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Display name for the built-in overlay character |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Injects a per-turn language instruction before the LLM call; set empty to disable |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Required for `gemini`; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Model name passed to `generateContent` |
@@ -134,6 +136,7 @@ Current unit tests cover:
 - single-turn orchestration flow
 - interruption of in-flight playback by newer speech
 - UI-event emission for caption overlays and interruption handling
+- overlay rendering and character-asset fallback
 - session history rules for interrupted turns
 - sentence-by-sentence playback chunking and TTS prefetch behavior
 - structured logging output

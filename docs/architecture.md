@@ -44,7 +44,8 @@ shared pipeline
   -> synthesize first chunk
   -> prefetch next chunk while current chunk is playing
   -> AudioOutput.play()
-  -> optional overlay animates the active chunk while playback runs
+  -> optional overlay reveals the active chunk while playback runs
+  -> overlay hides captions again when playback completes or is interrupted
   -> append assistant message to session after playback completes
 ```
 
@@ -67,7 +68,7 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `pipeline/events.py` | Conversation lifecycle events emitted to optional presentation sinks |
 | `pipeline/orchestrator.py` | End-to-end turn execution and playback chunk prefetch |
 | `config/settings.py` | Environment-driven settings, defaults, aliases, and provider normalization |
-| `ui/` | Local HTTP/SSE overlay server and browser-based character caption UI |
+| `ui/` | Local HTTP/SSE overlay server, transparent character overlay, and asset loading |
 | `util/logging.py` | Structured JSON log helpers |
 | `util/metrics.py` | In-memory stage latency recording |
 
@@ -130,6 +131,8 @@ Optional presentation path:
 
 - `OverlayServer` subscribes to orchestrator events and serves a local browser overlay
 - the overlay reveals each playback chunk progressively over the chunk's estimated playback duration
+- the overlay currently renders only the character and assistant speech text; captions are shown in front of the lower body so the face stays visible
+- captions are visible only while the assistant is actively speaking and clear on completion or interruption
 - the overlay is driven by sentence-sized playback chunks, not token streaming from the model
 
 Current compatibility constraints:

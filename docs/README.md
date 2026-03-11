@@ -16,6 +16,7 @@ Use the code first, then keep the docs aligned with it:
 - startup wiring and provider compatibility constraints: `src/vocalive/main.py`
 - runtime settings, defaults, and aliases: `src/vocalive/config/settings.py`
 - orchestration, interruption, and session semantics: `src/vocalive/pipeline/`
+- overlay rendering and asset-loading behavior: `src/vocalive/ui/`
 - human-facing project overview and startup guidance: `../README.md`
 - repository-specific implementation brief: `../AGENT.md`
 
@@ -43,7 +44,8 @@ Before closing a documentation-related change, verify:
 3. Configuration names and defaults match `src/vocalive/config/settings.py`.
 4. Coverage statements still reflect what exists in `tests/unit/`.
 5. Platform-specific or optional requirements such as `afplay` and `moonshine-voice` are called out explicitly.
-6. Future ideas are labeled as future work, not present-tense behavior.
+6. Overlay behavior, transparency, and asset paths still match `src/vocalive/ui/overlay.py`.
+7. Future ideas are labeled as future work, not present-tense behavior.
 
 ## Scope boundary
 

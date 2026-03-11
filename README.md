@@ -23,7 +23,7 @@ The repository currently ships with:
 - Implemented: Gemini `generateContent` integration over HTTPS
 - Implemented: AivisSpeech synthesis over the local HTTP API
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
-- Implemented: optional browser overlay with a built-in character, live captions, and per-chunk text reveal timed to speech playback
+- Implemented: optional transparent browser overlay with a character image, speech-only captions, and per-chunk text reveal timed to playback
 - Implemented: structured JSON logging and in-memory stage latency metrics
 - Implemented: unit tests for settings, device resolution, utterance accumulation, provider payload/selection logic, queue behavior, and orchestration
 - Not implemented yet: streaming partial STT / LLM / TTS
@@ -66,7 +66,7 @@ export VOCALIVE_GEMINI_API_KEY=...
 PYTHONPATH=src python3 -m vocalive
 ```
 
-When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay shows the built-in tiger-headphone character, the latest user utterance, and assistant captions that reveal gradually while each spoken sentence is being played.
+When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay is transparent, renders the character on the right, and shows assistant text only while the assistant is actively speaking. Each sentence-sized chunk is revealed progressively to match playback timing, then cleared when playback finishes or is interrupted.
 
 Current runtime constraints:
 
@@ -125,12 +125,12 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
-| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local browser overlay with live captions and the built-in character |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local transparent browser overlay with speech-only captions |
 | `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Host/interface used by the overlay HTTP server |
 | `VOCALIVE_OVERLAY_PORT` | `8765` | Port used by the overlay HTTP server |
 | `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
 | `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
-| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Name label shown above the built-in overlay character |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
@@ -158,7 +158,8 @@ Current provider support:
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command
-- `overlay` output is an optional local browser UI fed by orchestrator events and chunk-level playback timing
+- `overlay` is an optional local browser UI fed by orchestrator events and chunk-level playback timing
+- the overlay loads character art from `src/vocalive/ui/assets/character.png` when present, and otherwise falls back to the built-in vector character
 - provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
 
 ## Repository layout
@@ -171,7 +172,7 @@ src/vocalive/
   pipeline/    orchestration, cancellation, queues, and session state
   stt/         speech-to-text interface and adapters
   tts/         text-to-speech interface and adapters
-  ui/          local browser overlay server and built-in character UI
+  ui/          local browser overlay server, transparent character UI, and overlay assets
   util/        logging, metrics, and time helpers
   main.py      CLI entry point and adapter assembly
 
