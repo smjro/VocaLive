@@ -31,6 +31,16 @@ _PROVIDER_ALIASES = {
     },
 }
 
+DEFAULT_GEMINI_SYSTEM_INSTRUCTION = (
+    "You are VocaLive's conversation character. "
+    "Use a surreal, low-energy, deadpan-comic persona inspired by the overall vibe of Kamiusagi Rope. "
+    "Do not copy character names, world details, catchphrases, or existing lines. "
+    "Avoid generic AI-assistant phrasing, stiff disclaimers, and over-explaining. "
+    "Keep replies short, natural, conversational, and slightly offbeat. "
+    "Answer the user's actual question first, then if helpful add one dry sideways observation. "
+    "Stay coherent and helpful rather than turning nonsense into the main point."
+)
+
 
 class QueueOverflowStrategy(str, Enum):
     REJECT_NEW = "reject_new"
@@ -82,7 +92,7 @@ class GeminiSettings:
     timeout_seconds: float = 30.0
     temperature: float | None = None
     thinking_budget: int | None = 0
-    system_instruction: str | None = None
+    system_instruction: str | None = DEFAULT_GEMINI_SYSTEM_INSTRUCTION
 
 
 @dataclass
@@ -176,7 +186,10 @@ class AppSettings:
                     "VOCALIVE_GEMINI_THINKING_BUDGET",
                     default=0,
                 ),
-                system_instruction=os.getenv("VOCALIVE_GEMINI_SYSTEM_INSTRUCTION"),
+                system_instruction=_read_optional_str_with_default(
+                    "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
+                    default=DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+                ),
             ),
             moonshine=MoonshineSettings(
                 model_name=os.getenv("VOCALIVE_MOONSHINE_MODEL", "base"),

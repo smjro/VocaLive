@@ -11,7 +11,7 @@ SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from vocalive.config.settings import AppSettings
+from vocalive.config.settings import AppSettings, DEFAULT_GEMINI_SYSTEM_INSTRUCTION
 
 
 class AppSettingsTests(unittest.TestCase):
@@ -41,6 +41,10 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertEqual(settings.gemini.thinking_budget, 0)
+        self.assertEqual(
+            settings.gemini.system_instruction,
+            DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+        )
         self.assertEqual(settings.conversation.language, "ja")
 
     def test_from_env_allows_overriding_gemini_thinking_budget(self) -> None:
@@ -106,3 +110,15 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertIsNone(settings.conversation.language)
+
+    def test_from_env_allows_disabling_default_gemini_system_instruction(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION": "",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertIsNone(settings.gemini.system_instruction)
