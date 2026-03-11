@@ -6,6 +6,7 @@ import io
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
@@ -14,10 +15,11 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.audio.input import MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput
-from vocalive.config.settings import AppSettings, InputProvider, InputSettings
+from vocalive.config.settings import AppSettings, InputProvider, InputSettings, ScreenCaptureSettings
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator
 from vocalive.models import AudioSegment
+from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
 
@@ -57,6 +59,51 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertFalse(audio_input.prefer_external_device)
         self.assertEqual(audio_input._accumulator.pre_speech_ms, 180.0)
         self.assertEqual(audio_input._accumulator.speech_hold_ms, 350.0)
+
+    def test_build_orchestrator_enables_screen_capture_for_gemini_on_macos(self) -> None:
+        with patch("vocalive.main.sys.platform", "darwin"):
+            orchestrator = build_orchestrator(
+                AppSettings(
+                    model_provider="gemini",
+                    screen_capture=ScreenCaptureSettings(
+                        enabled=True,
+                        window_name="YouTube",
+                        timeout_seconds=7.0,
+                        resize_max_edge_px=960,
+                    ),
+                )
+            )
+
+        self.assertIsInstance(orchestrator.language_model, GeminiLanguageModel)
+        self.assertIsInstance(orchestrator.screen_capture_engine, MacOSWindowScreenCapture)
+        assert isinstance(orchestrator.screen_capture_engine, MacOSWindowScreenCapture)
+        self.assertEqual(orchestrator.screen_capture_engine.window_name, "YouTube")
+        self.assertEqual(orchestrator.screen_capture_engine.timeout_seconds, 7.0)
+        self.assertEqual(orchestrator.screen_capture_engine.resize_max_edge_px, 960)
+
+    def test_build_orchestrator_rejects_screen_capture_without_gemini(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "screen capture input currently requires VOCALIVE_MODEL_PROVIDER=gemini",
+        ):
+            build_orchestrator(
+                AppSettings(
+                    screen_capture=ScreenCaptureSettings(enabled=True),
+                )
+            )
+
+    def test_build_orchestrator_rejects_screen_capture_without_window_name(self) -> None:
+        with patch("vocalive.main.sys.platform", "darwin"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "screen capture input currently requires VOCALIVE_SCREEN_WINDOW_NAME",
+            ):
+                build_orchestrator(
+                    AppSettings(
+                        model_provider="gemini",
+                        screen_capture=ScreenCaptureSettings(enabled=True),
+                    )
+                )
 
 
 class _ScriptedMicrophoneInput(MicrophoneAudioInput):

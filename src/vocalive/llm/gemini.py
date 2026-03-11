@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from vocalive.llm.base import LanguageModel
-from vocalive.models import AssistantResponse, ConversationMessage, ConversationRequest
+from vocalive.models import (
+    AssistantResponse,
+    ConversationInlineDataPart,
+    ConversationMessage,
+    ConversationRequest,
+    ConversationRequestPart,
+    ConversationTextPart,
+)
 from vocalive.pipeline.interruption import CancellationToken
 
 
 class GeminiLanguageModel(LanguageModel):
     name = "gemini-2.5-flash"
+    supports_multimodal_input = True
 
     def __init__(
         self,
@@ -98,6 +107,7 @@ def _build_generate_content_payload(
             instruction_parts.append({"text": message.content})
 
     contents = _coalesce_messages(request.messages)
+    _append_current_user_parts(contents, request.current_user_parts)
     if not contents:
         raise ValueError("Gemini request must include at least one non-system message")
 
@@ -153,6 +163,35 @@ def _coalesce_messages(messages: tuple[ConversationMessage, ...]) -> list[dict[s
             continue
         contents.append({"role": role, "parts": [{"text": message.content}]})
     return contents
+
+
+def _append_current_user_parts(
+    contents: list[dict[str, object]],
+    current_user_parts: tuple[ConversationRequestPart, ...],
+) -> None:
+    if not current_user_parts:
+        return
+
+    encoded_parts = [_encode_request_part(part) for part in current_user_parts]
+    if contents and contents[-1]["role"] == "user":
+        parts = contents[-1]["parts"]
+        assert isinstance(parts, list)
+        parts.extend(encoded_parts)
+        return
+    contents.append({"role": "user", "parts": encoded_parts})
+
+
+def _encode_request_part(part: ConversationRequestPart) -> dict[str, object]:
+    if isinstance(part, ConversationTextPart):
+        return {"text": part.text}
+    if isinstance(part, ConversationInlineDataPart):
+        return {
+            "inline_data": {
+                "mime_type": part.mime_type,
+                "data": base64.b64encode(part.data).decode("ascii"),
+            }
+        }
+    raise TypeError(f"Unsupported conversation request part: {type(part)!r}")
 
 
 def _extract_response_text(response_body: dict[str, object]) -> str:

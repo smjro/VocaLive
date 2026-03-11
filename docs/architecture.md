@@ -37,6 +37,7 @@ shared pipeline
   -> bounded ingress queue
   -> STT adapter
   -> append user message to session
+  -> optionally capture the configured window for the current turn when a trigger phrase matches
   -> prepend conversation-language system instruction when configured
   -> LLM adapter
   -> split assistant text into sentence-sized chunks
@@ -58,6 +59,7 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `audio/vad.py` | Turn detection abstraction; current live path uses fixed-silence detection |
 | `stt/` | Speech-to-text interface and adapters |
 | `llm/` | Language model interface and adapters |
+| `screen/` | Optional named-window screenshot capture adapters |
 | `tts/` | Text-to-speech interface and adapters |
 | `pipeline/queues.py` | Bounded ingress queue with explicit overflow policy |
 | `pipeline/interruption.py` | Cancellation token and active-turn interruption control |
@@ -74,7 +76,7 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 - `AudioSegment`: utterance-sized audio payload plus metadata, including optional `transcript_hint`
 - `Transcription`: normalized STT output
 - `ConversationMessage`: stored session history item
-- `ConversationRequest`: snapshot of the current conversation passed to the LLM
+- `ConversationRequest`: snapshot of the current conversation plus optional current-turn multimodal parts passed to the LLM
 - `AssistantResponse`: normalized LLM output
 - `SynthesizedSpeech`: TTS output for playback
 - `TurnContext`: session and turn identifiers for logs and metrics
@@ -99,6 +101,7 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 
 - user messages are appended after STT completes
 - the LLM receives a snapshot of the current session plus an optional conversation-language system instruction
+- screen captures are request-scoped extras for the current user turn and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
 - interrupted assistant replies are therefore not committed to session history
 
@@ -119,6 +122,7 @@ Optional real adapters:
 
 - `MoonshineSpeechToTextEngine`
 - `GeminiLanguageModel`
+- `MacOSFullscreenScreenCapture`
 - `AivisSpeechTextToSpeechEngine`
 - `SpeakerAudioOutput`
 
@@ -126,6 +130,9 @@ Current compatibility constraints:
 
 - microphone input is rejected when STT is still `mock`
 - speaker output is rejected unless TTS is `aivis`
+- screen capture is rejected unless the model provider is `gemini`
+- screen capture is rejected unless `VOCALIVE_SCREEN_WINDOW_NAME` is configured
+- screen capture currently supports macOS only and resolves the first on-screen window that matches the configured title or owner name
 - speaker playback depends on an external playback command and defaults to `afplay` on macOS
 
 The stdin shell still works with the real-provider assembly because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
@@ -140,11 +147,14 @@ Structured logs are emitted for:
 - `turn_interrupted`
 - `turn_cancelled`
 - `turn_failed`
+- `screen_capture_ready`
+- `screen_capture_failed`
 - `transcription_ready`
 - `response_ready`
 
 The orchestrator records latency for:
 
+- `screen_capture` when the feature is triggered
 - `stt`
 - `llm`
 - `tts`
