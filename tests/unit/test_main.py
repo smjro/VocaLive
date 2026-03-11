@@ -14,12 +14,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.audio.input import MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput
-from vocalive.config.settings import AppSettings, InputProvider, InputSettings
+from vocalive.config.settings import AppSettings, InputProvider, InputSettings, OverlaySettings
 from vocalive.llm.gemini import GeminiLanguageModel
-from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator
+from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator, build_overlay
 from vocalive.models import AudioSegment
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
+from vocalive.ui.overlay import OverlayServer
 
 
 class BuildOrchestratorTests(unittest.TestCase):
@@ -57,6 +58,18 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertFalse(audio_input.prefer_external_device)
         self.assertEqual(audio_input._accumulator.pre_speech_ms, 180.0)
         self.assertEqual(audio_input._accumulator.speech_hold_ms, 350.0)
+
+    def test_build_overlay_returns_server_when_enabled(self) -> None:
+        overlay = build_overlay(
+            AppSettings(
+                overlay=OverlaySettings(
+                    enabled=True,
+                    auto_open=False,
+                )
+            )
+        )
+
+        self.assertIsInstance(overlay, OverlayServer)
 
 
 class _ScriptedMicrophoneInput(MicrophoneAudioInput):

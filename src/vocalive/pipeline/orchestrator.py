@@ -16,6 +16,7 @@ from vocalive.models import (
     SynthesizedSpeech,
     TurnContext,
 )
+from vocalive.pipeline.events import ConversationEvent, ConversationEventSink, NullConversationEventSink
 from vocalive.pipeline.interruption import (
     CancellationToken,
     InterruptionController,
@@ -47,6 +48,7 @@ class ConversationOrchestrator:
         language_model: LanguageModel,
         tts_engine: TextToSpeechEngine,
         audio_output: AudioOutput,
+        event_sink: ConversationEventSink | None = None,
         logger: logging.Logger | None = None,
         metrics: MetricsRecorder | None = None,
     ) -> None:
@@ -55,6 +57,7 @@ class ConversationOrchestrator:
         self.language_model = language_model
         self.tts_engine = tts_engine
         self.audio_output = audio_output
+        self.event_sink = event_sink or NullConversationEventSink()
         self.logger = logger or get_logger("vocalive.orchestrator")
         self.metrics = metrics or InMemoryMetricsRecorder()
         self.session = ConversationSession(session_id=settings.session_id)
@@ -124,6 +127,13 @@ class ConversationOrchestrator:
             try:
                 await self._process_turn(segment=segment, context=context, cancellation=cancellation)
             except TurnCancelledError:
+                self._emit_event(
+                    ConversationEvent(
+                        type="turn_cancelled",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                    )
+                )
                 log_event(
                     self.logger,
                     "turn_cancelled",
@@ -146,6 +156,7 @@ class ConversationOrchestrator:
                 self._queue.task_done()
                 if self._queue.empty() and not self._interruptions.has_active_turn:
                     self._idle_event.set()
+                    self._emit_event(ConversationEvent(type="session_idle", session_id=context.session_id))
 
     async def _process_turn(
         self,
@@ -166,6 +177,14 @@ class ConversationOrchestrator:
             stt_provider=transcription.provider,
         )
         self.session.append_user_message(transcription.text)
+        self._emit_event(
+            ConversationEvent(
+                type="transcription_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=transcription.text,
+            )
+        )
 
         request = ConversationRequest(
             context=context,
@@ -184,11 +203,27 @@ class ConversationOrchestrator:
             text=response.text,
             llm_provider=response.provider,
         )
+        self._emit_event(
+            ConversationEvent(
+                type="response_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=response.text,
+            )
+        )
 
         self._active_stage = "tts"
         await self._play_response(response=response, context=context, cancellation=cancellation)
 
         self.session.append_assistant_message(response.text)
+        self._emit_event(
+            ConversationEvent(
+                type="assistant_message_committed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=response.text,
+            )
+        )
         self._active_stage = None
         self.metrics.record_duration(
             stage="turn_total",
@@ -231,6 +266,17 @@ class ConversationOrchestrator:
                     )
                 playback_started_ms = monotonic_ms()
                 self._active_stage = "playback"
+                self._emit_event(
+                    ConversationEvent(
+                        type="assistant_chunk_started",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        text=synthesized_chunk.speech.text,
+                        chunk_index=index,
+                        chunk_count=len(chunks),
+                        duration_ms=_estimate_playback_duration_ms(synthesized_chunk.speech),
+                    )
+                )
                 await self.audio_output.play(synthesized_chunk.speech, cancellation=cancellation)
                 playback_duration_ms += monotonic_ms() - playback_started_ms
         finally:
@@ -261,6 +307,15 @@ class ConversationOrchestrator:
             stage=self._active_stage,
             reason=reason,
         )
+        self._emit_event(
+            ConversationEvent(
+                type="turn_interrupted",
+                session_id=active_context.session_id,
+                turn_id=active_context.turn_id,
+                stage=self._active_stage,
+                reason=reason,
+            )
+        )
 
     async def _synthesize_chunk(
         self,
@@ -281,6 +336,19 @@ class ConversationOrchestrator:
         if language_instruction is not None:
             messages.insert(0, ConversationMessage(role="system", content=language_instruction))
         return tuple(messages)
+
+    def _emit_event(self, event: ConversationEvent) -> None:
+        try:
+            self.event_sink.emit(event)
+        except Exception as exc:
+            log_event(
+                self.logger,
+                "event_sink_failed",
+                session_id=event.session_id,
+                turn_id=event.turn_id,
+                event_type=event.type,
+                error=str(exc),
+            )
 
 
 def _build_conversation_language_instruction(language: str | None) -> str | None:
@@ -313,6 +381,15 @@ def _language_name(language: str) -> str:
         "en-gb": "English",
     }
     return language_names.get(normalized_language, language)
+
+
+def _estimate_playback_duration_ms(speech: SynthesizedSpeech) -> float | None:
+    if speech.duration_ms is not None and speech.duration_ms > 0:
+        return speech.duration_ms
+    bytes_per_second = speech.sample_rate_hz * speech.channels * speech.sample_width_bytes
+    if bytes_per_second <= 0 or not speech.audio:
+        return None
+    return (len(speech.audio) / bytes_per_second) * 1000.0
 
 
 def _split_response_for_playback(text: str) -> tuple[str, ...]:

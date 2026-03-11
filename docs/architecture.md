@@ -40,9 +40,11 @@ shared pipeline
   -> prepend conversation-language system instruction when configured
   -> LLM adapter
   -> split assistant text into sentence-sized chunks
+  -> emit conversation events for optional UI sinks
   -> synthesize first chunk
   -> prefetch next chunk while current chunk is playing
   -> AudioOutput.play()
+  -> optional overlay animates the active chunk while playback runs
   -> append assistant message to session after playback completes
 ```
 
@@ -62,8 +64,10 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `pipeline/queues.py` | Bounded ingress queue with explicit overflow policy |
 | `pipeline/interruption.py` | Cancellation token and active-turn interruption control |
 | `pipeline/session.py` | Ordered conversation history for one session |
+| `pipeline/events.py` | Conversation lifecycle events emitted to optional presentation sinks |
 | `pipeline/orchestrator.py` | End-to-end turn execution and playback chunk prefetch |
 | `config/settings.py` | Environment-driven settings, defaults, aliases, and provider normalization |
+| `ui/` | Local HTTP/SSE overlay server and browser-based character caption UI |
 | `util/logging.py` | Structured JSON log helpers |
 | `util/metrics.py` | In-memory stage latency recording |
 
@@ -122,6 +126,12 @@ Optional real adapters:
 - `AivisSpeechTextToSpeechEngine`
 - `SpeakerAudioOutput`
 
+Optional presentation path:
+
+- `OverlayServer` subscribes to orchestrator events and serves a local browser overlay
+- the overlay reveals each playback chunk progressively over the chunk's estimated playback duration
+- the overlay is driven by sentence-sized playback chunks, not token streaming from the model
+
 Current compatibility constraints:
 
 - microphone input is rejected when STT is still `mock`
@@ -142,6 +152,7 @@ Structured logs are emitted for:
 - `turn_failed`
 - `transcription_ready`
 - `response_ready`
+- `event_sink_failed`
 
 The orchestrator records latency for:
 
@@ -160,6 +171,7 @@ The following are not implemented today:
 - streaming partial STT results
 - streaming token output from the LLM
 - streaming audio output from TTS
+- token-accurate text reveal; the current overlay is synchronized at sentence/chunk granularity
 - echo cancellation / duplex coordination between microphone and speaker
 - persistent metrics export
 - restartable worker isolation between pipeline stages

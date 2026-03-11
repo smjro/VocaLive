@@ -22,6 +22,7 @@ from vocalive.models import (
     SynthesizedSpeech,
     TurnContext,
 )
+from vocalive.pipeline.events import ConversationEvent, ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
 from vocalive.pipeline.interruption import CancellationToken
 from vocalive.stt.mock import MockSpeechToTextEngine
@@ -82,7 +83,16 @@ class RecordingTextToSpeechEngine(TextToSpeechEngine):
             provider=self.name,
             audio=text.encode("utf-8"),
             sample_rate_hz=24_000,
+            duration_ms=max(320.0, len(text) * 70.0),
         )
+
+
+class RecordingEventSink(ConversationEventSink):
+    def __init__(self) -> None:
+        self.events: list[ConversationEvent] = []
+
+    def emit(self, event: ConversationEvent) -> None:
+        self.events.append(event)
 
 
 class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
@@ -281,3 +291,82 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             await orchestrator.wait_for_idle()
         finally:
             await orchestrator.stop()
+
+    async def test_ui_events_follow_turn_lifecycle_and_chunk_playback(self) -> None:
+        event_sink = RecordingEventSink()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=StaticLanguageModel("First sentence. Second sentence."),
+            tts_engine=RecordingTextToSpeechEngine(),
+            audio_output=MemoryAudioOutput(),
+            event_sink=event_sink,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("hello"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            [event.type for event in event_sink.events],
+            [
+                "transcription_ready",
+                "response_ready",
+                "assistant_chunk_started",
+                "assistant_chunk_started",
+                "assistant_message_committed",
+                "session_idle",
+            ],
+        )
+        self.assertEqual(
+            [event.text for event in event_sink.events if event.type == "assistant_chunk_started"],
+            ["First sentence.", "Second sentence."],
+        )
+        self.assertTrue(
+            all(
+                (event.duration_ms or 0) > 0
+                for event in event_sink.events
+                if event.type == "assistant_chunk_started"
+            )
+        )
+
+    async def test_interrupted_turn_emits_interruption_and_cancellation_events(self) -> None:
+        event_sink = RecordingEventSink()
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=StaticLanguageModel("A fairly long first sentence."),
+            tts_engine=RecordingTextToSpeechEngine(),
+            audio_output=output,
+            event_sink=event_sink,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+            await self._wait_for(lambda: output.started_texts == ["A fairly long first sentence."])
+            await orchestrator.submit_utterance(AudioSegment.from_text("second"))
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        event_types = [event.type for event in event_sink.events]
+        self.assertIn("turn_interrupted", event_types)
+        self.assertIn("turn_cancelled", event_types)

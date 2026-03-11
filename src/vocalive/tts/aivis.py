@@ -48,6 +48,7 @@ class AivisSpeechTextToSpeechEngine(TextToSpeechEngine):
         if cancellation is not None:
             cancellation.raise_if_cancelled()
         sample_rate_hz, channels, sample_width_bytes = _read_wave_metadata(audio_bytes)
+        duration_ms = _read_wave_duration_ms(audio_bytes)
         return SynthesizedSpeech(
             text=text,
             provider=self.name,
@@ -55,6 +56,7 @@ class AivisSpeechTextToSpeechEngine(TextToSpeechEngine):
             sample_rate_hz=sample_rate_hz,
             channels=channels,
             sample_width_bytes=sample_width_bytes,
+            duration_ms=duration_ms,
             mime_type="audio/wav",
             file_extension=".wav",
         )
@@ -191,3 +193,11 @@ def _read_wave_metadata(audio_bytes: bytes) -> tuple[int, int, int]:
             wav_file.getnchannels(),
             wav_file.getsampwidth(),
         )
+
+
+def _read_wave_duration_ms(audio_bytes: bytes) -> float:
+    with wave.open(BytesIO(audio_bytes), "rb") as wav_file:
+        frame_rate = wav_file.getframerate()
+        if frame_rate <= 0:
+            raise RuntimeError("AivisSpeech returned invalid WAV metadata: frame rate must be > 0")
+        return (wav_file.getnframes() / frame_rate) * 1000.0

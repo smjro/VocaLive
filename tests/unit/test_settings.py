@@ -122,3 +122,25 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertIsNone(settings.gemini.system_instruction)
+
+    def test_from_env_reads_overlay_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_OVERLAY_ENABLED": "true",
+                "VOCALIVE_OVERLAY_HOST": "0.0.0.0",
+                "VOCALIVE_OVERLAY_PORT": "9876",
+                "VOCALIVE_OVERLAY_AUTO_OPEN": "false",
+                "VOCALIVE_OVERLAY_TITLE": "Overlay Test",
+                "VOCALIVE_OVERLAY_CHARACTER_NAME": "Stripe",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertTrue(settings.overlay.enabled)
+        self.assertEqual(settings.overlay.host, "0.0.0.0")
+        self.assertEqual(settings.overlay.port, 9876)
+        self.assertFalse(settings.overlay.auto_open)
+        self.assertEqual(settings.overlay.title, "Overlay Test")
+        self.assertEqual(settings.overlay.character_name, "Stripe")

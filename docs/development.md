@@ -32,6 +32,8 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
 - microphone mode currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_OVERLAY_ENABLED=true` starts a local browser overlay that shows the built-in character and live captions
+- when `VOCALIVE_OVERLAY_AUTO_OPEN=true`, startup asks the system browser to open the overlay automatically
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking, so speech onset can stop stale playback immediately
@@ -66,6 +68,12 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | `gemini` is supported; aliases such as `google gemini` are accepted |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` is supported; aliases such as `aivis speech` are accepted |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Starts the local browser overlay with live captions |
+| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Bind host/interface for the overlay server |
+| `VOCALIVE_OVERLAY_PORT` | `8765` | Bind port for the overlay server |
+| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Opens the overlay page in the default browser on startup |
+| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Display name for the built-in overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Injects a per-turn language instruction before the LLM call; set empty to disable |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Required for `gemini`; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Model name passed to `generateContent` |
@@ -95,6 +103,8 @@ Useful working combinations today:
    `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
 3. Full live voice path
    `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
+4. Live voice path with overlay
+   `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
 
 The second combination is useful because the stdin shell supplies `transcript_hint`, which lets the real-provider assembly come up before the live microphone path is enabled.
 
@@ -123,6 +133,7 @@ Current unit tests cover:
 - Aivis speaker/style resolution and WAV metadata parsing
 - single-turn orchestration flow
 - interruption of in-flight playback by newer speech
+- UI-event emission for caption overlays and interruption handling
 - session history rules for interrupted turns
 - sentence-by-sentence playback chunking and TTS prefetch behavior
 - structured logging output

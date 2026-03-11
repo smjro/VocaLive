@@ -86,6 +86,16 @@ class OutputSettings:
 
 
 @dataclass
+class OverlaySettings:
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auto_open: bool = True
+    title: str = "VocaLive Overlay"
+    character_name: str = "Tora"
+
+
+@dataclass
 class GeminiSettings:
     api_key: str | None = None
     model_name: str = "gemini-2.5-flash"
@@ -125,6 +135,7 @@ class AppSettings:
     conversation: ConversationSettings = field(default_factory=ConversationSettings)
     input: InputSettings = field(default_factory=InputSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
+    overlay: OverlaySettings = field(default_factory=OverlaySettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
     aivis: AivisSpeechSettings = field(default_factory=AivisSpeechSettings)
@@ -176,6 +187,14 @@ class AppSettings:
                     os.getenv("VOCALIVE_OUTPUT_PROVIDER", OutputProvider.MEMORY.value)
                 ),
                 speaker_command=os.getenv("VOCALIVE_SPEAKER_COMMAND"),
+            ),
+            overlay=OverlaySettings(
+                enabled=_read_bool("VOCALIVE_OVERLAY_ENABLED", default=False),
+                host=os.getenv("VOCALIVE_OVERLAY_HOST", "127.0.0.1"),
+                port=_read_int("VOCALIVE_OVERLAY_PORT", default=8765),
+                auto_open=_read_bool("VOCALIVE_OVERLAY_AUTO_OPEN", default=True),
+                title=os.getenv("VOCALIVE_OVERLAY_TITLE", "VocaLive Overlay"),
+                character_name=os.getenv("VOCALIVE_OVERLAY_CHARACTER_NAME", "Tora"),
             ),
             gemini=GeminiSettings(
                 api_key=os.getenv("VOCALIVE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"),

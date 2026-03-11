@@ -11,7 +11,7 @@ SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from vocalive.tts.aivis import _read_wave_metadata, _select_style
+from vocalive.tts.aivis import _read_wave_duration_ms, _read_wave_metadata, _select_style
 
 
 class AivisSpeechTests(unittest.TestCase):
@@ -47,3 +47,13 @@ class AivisSpeechTests(unittest.TestCase):
             wav_file.writeframes(b"\x00\x00" * 64)
 
         self.assertEqual(_read_wave_metadata(buffer.getvalue()), (24_000, 1, 2))
+
+    def test_read_wave_duration_ms_returns_length(self) -> None:
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24_000)
+            wav_file.writeframes(b"\x00\x00" * 240)
+
+        self.assertEqual(_read_wave_duration_ms(buffer.getvalue()), 10.0)

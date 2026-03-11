@@ -68,5 +68,6 @@ class SynthesizedSpeech:
     sample_rate_hz: int
     channels: int = 1
     sample_width_bytes: int = 2
+    duration_ms: float | None = None
     mime_type: str = "audio/L16"
     file_extension: str | None = None

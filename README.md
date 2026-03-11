@@ -23,6 +23,7 @@ The repository currently ships with:
 - Implemented: Gemini `generateContent` integration over HTTPS
 - Implemented: AivisSpeech synthesis over the local HTTP API
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
+- Implemented: optional browser overlay with a built-in character, live captions, and per-chunk text reveal timed to speech playback
 - Implemented: structured JSON logging and in-memory stage latency metrics
 - Implemented: unit tests for settings, device resolution, utterance accumulation, provider payload/selection logic, queue behavior, and orchestration
 - Not implemented yet: streaming partial STT / LLM / TTS
@@ -58,17 +59,21 @@ export VOCALIVE_STT_PROVIDER=moonshine
 export VOCALIVE_MODEL_PROVIDER=gemini
 export VOCALIVE_TTS_PROVIDER=aivis
 export VOCALIVE_OUTPUT_PROVIDER=speaker
+export VOCALIVE_OVERLAY_ENABLED=true
 export VOCALIVE_CONVERSATION_LANGUAGE=ja
 export VOCALIVE_AIVIS_BASE_URL=http://127.0.0.1:10101
 export VOCALIVE_GEMINI_API_KEY=...
 PYTHONPATH=src python3 -m vocalive
 ```
 
+When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay shows the built-in tiger-headphone character, the latest user utterance, and assistant captions that reveal gradually while each spoken sentence is being played.
+
 Current runtime constraints:
 
 - `VOCALIVE_INPUT_PROVIDER=microphone` currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - speaker playback uses `afplay {path}` by default on macOS; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
+- the overlay is local-only and driven by sentence playback events; it is not token streaming from the LLM
 - Gemini accepts either `VOCALIVE_GEMINI_API_KEY` or `GEMINI_API_KEY`
 - Gemini defaults to a surreal, deadpan conversation persona inspired by the vibe of Kamiusagi Rope; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
 
@@ -120,6 +125,12 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local browser overlay with live captions and the built-in character |
+| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Host/interface used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_PORT` | `8765` | Port used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
+| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Name label shown above the built-in overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
@@ -147,6 +158,7 @@ Current provider support:
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command
+- `overlay` output is an optional local browser UI fed by orchestrator events and chunk-level playback timing
 - provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
 
 ## Repository layout
@@ -159,6 +171,7 @@ src/vocalive/
   pipeline/    orchestration, cancellation, queues, and session state
   stt/         speech-to-text interface and adapters
   tts/         text-to-speech interface and adapters
+  ui/          local browser overlay server and built-in character UI
   util/        logging, metrics, and time helpers
   main.py      CLI entry point and adapter assembly
 
