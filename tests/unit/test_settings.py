@@ -11,7 +11,11 @@ SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from vocalive.config.settings import AppSettings, DEFAULT_GEMINI_SYSTEM_INSTRUCTION
+from vocalive.config.settings import (
+    AppSettings,
+    DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+    DEFAULT_SCREEN_TRIGGER_PHRASES,
+)
 
 
 class AppSettingsTests(unittest.TestCase):
@@ -122,3 +126,35 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertIsNone(settings.gemini.system_instruction)
+
+    def test_from_env_reads_screen_capture_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_SCREEN_CAPTURE_ENABLED": "true",
+                "VOCALIVE_SCREEN_WINDOW_NAME": "YouTube",
+                "VOCALIVE_SCREEN_TRIGGER_PHRASES": "画面見て, screen please",
+                "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS": "7.5",
+                "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX": "960",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertTrue(settings.screen_capture.enabled)
+        self.assertEqual(settings.screen_capture.window_name, "YouTube")
+        self.assertEqual(
+            settings.screen_capture.trigger_phrases,
+            ("画面見て", "screen please"),
+        )
+        self.assertEqual(settings.screen_capture.timeout_seconds, 7.5)
+        self.assertEqual(settings.screen_capture.resize_max_edge_px, 960)
+
+    def test_from_env_defaults_screen_capture_triggers(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(
+            settings.screen_capture.trigger_phrases,
+            DEFAULT_SCREEN_TRIGGER_PHRASES,
+        )

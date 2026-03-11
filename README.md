@@ -21,6 +21,7 @@ The repository currently ships with:
 - Implemented: mock STT, echo LLM, mock TTS, and in-memory playback for local development
 - Implemented: Moonshine STT via `moonshine-voice`
 - Implemented: Gemini `generateContent` integration over HTTPS
+- Implemented: trigger-based named-window screenshot capture for Gemini input on macOS
 - Implemented: AivisSpeech synthesis over the local HTTP API
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
 - Implemented: structured JSON logging and in-memory stage latency metrics
@@ -59,6 +60,9 @@ export VOCALIVE_MODEL_PROVIDER=gemini
 export VOCALIVE_TTS_PROVIDER=aivis
 export VOCALIVE_OUTPUT_PROVIDER=speaker
 export VOCALIVE_CONVERSATION_LANGUAGE=ja
+export VOCALIVE_SCREEN_CAPTURE_ENABLED=true
+export VOCALIVE_SCREEN_WINDOW_NAME="Steam"
+export VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX=1280
 export VOCALIVE_AIVIS_BASE_URL=http://127.0.0.1:10101
 export VOCALIVE_GEMINI_API_KEY=...
 PYTHONPATH=src python3 -m vocalive
@@ -68,6 +72,7 @@ Current runtime constraints:
 
 - `VOCALIVE_INPUT_PROVIDER=microphone` currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` currently requires `VOCALIVE_MODEL_PROVIDER=gemini`, macOS, and Screen Recording permission
 - speaker playback uses `afplay {path}` by default on macOS; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
 - Gemini accepts either `VOCALIVE_GEMINI_API_KEY` or `GEMINI_API_KEY`
 - Gemini defaults to a surreal, deadpan conversation persona inspired by the vibe of Kamiusagi Rope; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
@@ -79,6 +84,16 @@ Microphone tuning notes:
 - if phrase starts are clipped, increase `VOCALIVE_MIC_PRE_SPEECH_MS`
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
 - in microphone mode, local speech onset interrupts stale assistant playback before the next utterance is fully emitted
+
+Screen-capture notes:
+
+- screen capture is request-scoped, not persistent session history
+- capture is triggered only when the normalized user utterance contains one of the configured trigger phrases
+- the current implementation resolves the first on-screen window whose title or owner name matches `VOCALIVE_SCREEN_WINDOW_NAME`
+- captured screenshots are downscaled so the longest edge is at most `1280px` before they are attached to Gemini; set `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` empty to disable that
+- the resolved window id is cached and reused until capture fails, then looked up again
+- `VOCALIVE_SCREEN_WINDOW_NAME` is required when screen capture is enabled
+- if macOS screen recording permission is missing, the turn falls back to text-only input and logs `screen_capture_failed`
 
 The stdin shell can also exercise the Gemini and Aivis wiring without a microphone. Typed input is stored as `AudioSegment.transcript_hint`, so a `moonshine` configuration can still run cleanly before you switch to live microphone mode. The first real Moonshine transcription downloads and caches the selected model files.
 
@@ -127,6 +142,11 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
 | `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
+| `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
+| `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
+| `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |
+| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for macOS window lookup and `screencapture` |
+| `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | AivisSpeech engine base URL |
 | `VOCALIVE_AIVIS_SPEAKER_ID` | unset | Explicit AivisSpeech style ID |
@@ -145,6 +165,7 @@ Current provider support:
 - `moonshine` uses the optional `moonshine-voice` package for STT
 - `VOCALIVE_MOONSHINE_MODEL=base` resolves a language-specific Moonshine model from `VOCALIVE_CONVERSATION_LANGUAGE`, so the default Japanese configuration resolves to `base-ja`
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
+- optional screen capture resolves a named on-screen window on macOS and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command
 - provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
@@ -157,6 +178,7 @@ src/vocalive/
   config/      environment-driven runtime configuration
   llm/         language model interface and adapters
   pipeline/    orchestration, cancellation, queues, and session state
+  screen/      optional named-window screen capture adapters
   stt/         speech-to-text interface and adapters
   tts/         text-to-speech interface and adapters
   util/        logging, metrics, and time helpers

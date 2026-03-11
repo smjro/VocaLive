@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Union
 
 from .util.time import utc_timestamp
 
@@ -49,9 +49,24 @@ class ConversationMessage:
 
 
 @dataclass(frozen=True)
+class ConversationTextPart:
+    text: str
+
+
+@dataclass(frozen=True)
+class ConversationInlineDataPart:
+    mime_type: str
+    data: bytes
+
+
+ConversationRequestPart = Union[ConversationTextPart, ConversationInlineDataPart]
+
+
+@dataclass(frozen=True)
 class ConversationRequest:
     context: TurnContext
     messages: tuple[ConversationMessage, ...]
+    current_user_parts: tuple[ConversationRequestPart, ...] = ()
 
 
 @dataclass(frozen=True)

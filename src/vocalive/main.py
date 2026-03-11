@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from vocalive.audio.input import AudioInput, MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
@@ -9,6 +10,7 @@ from vocalive.llm.echo import EchoLanguageModel
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
+from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.mock import MockTextToSpeechEngine
@@ -76,12 +78,32 @@ def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
         )
     else:
         audio_output = MemoryAudioOutput()
+    screen_capture_engine = None
+    if settings.screen_capture.enabled:
+        if settings.model_provider != "gemini":
+            raise ValueError(
+                "screen capture input currently requires VOCALIVE_MODEL_PROVIDER=gemini"
+            )
+        if not settings.screen_capture.window_name:
+            raise ValueError(
+                "screen capture input currently requires VOCALIVE_SCREEN_WINDOW_NAME"
+            )
+        if sys.platform != "darwin":
+            raise ValueError(
+                "screen capture input currently supports macOS only"
+            )
+        screen_capture_engine = MacOSWindowScreenCapture(
+            window_name=settings.screen_capture.window_name,
+            timeout_seconds=settings.screen_capture.timeout_seconds,
+            resize_max_edge_px=settings.screen_capture.resize_max_edge_px,
+        )
     return ConversationOrchestrator(
         settings=settings,
         stt_engine=stt_engine,
         language_model=language_model,
         tts_engine=tts_engine,
         audio_output=audio_output,
+        screen_capture_engine=screen_capture_engine,
     )
 
 

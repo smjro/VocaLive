@@ -39,8 +39,11 @@ The current entry point is `src/vocalive/main.py`.
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected external mic over a built-in default input
 - the microphone path uses local RMS thresholding plus silence timing, not a production VAD
 - the stdin shell sets `AudioSegment.transcript_hint`, so `moonshine`-selected configs can still exercise Gemini and Aivis wiring before switching to live microphone capture
+- when screen capture is enabled, configured trigger phrases attach one screenshot of the configured window to the current Gemini turn only
 
 Speaker playback uses `afplay {path}` by default on macOS. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
+
+Screen capture currently uses the macOS `screencapture` command, resolves the configured on-screen window by title or owner name, and requires Screen Recording permission.
 
 ## Configuration
 
@@ -73,6 +76,11 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
 | `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it |
+| `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
+| `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required selector matched against on-screen window title first, then owner name |
+| `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases matched against the normalized utterance |
+| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for macOS window lookup and `screencapture` |
+| `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | Local AivisSpeech engine base URL |
 | `VOCALIVE_AIVIS_SPEAKER_ID` | unset | Preferred explicit AivisSpeech style ID |
@@ -95,6 +103,12 @@ Useful working combinations today:
    `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
 3. Full live voice path
    `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
+
+Screen capture can be layered on combinations 2 and 3 when:
+
+- `VOCALIVE_SCREEN_CAPTURE_ENABLED=true`
+- `VOCALIVE_MODEL_PROVIDER=gemini`
+- the app is running on macOS with Screen Recording permission
 
 The second combination is useful because the stdin shell supplies `transcript_hint`, which lets the real-provider assembly come up before the live microphone path is enabled.
 

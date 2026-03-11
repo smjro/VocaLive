@@ -11,8 +11,11 @@ from vocalive.llm.base import LanguageModel
 from vocalive.models import (
     AssistantResponse,
     AudioSegment,
+    ConversationInlineDataPart,
     ConversationMessage,
     ConversationRequest,
+    ConversationRequestPart,
+    ConversationTextPart,
     SynthesizedSpeech,
     TurnContext,
 )
@@ -23,6 +26,7 @@ from vocalive.pipeline.interruption import (
 )
 from vocalive.pipeline.queues import BoundedAsyncQueue
 from vocalive.pipeline.session import ConversationSession
+from vocalive.screen.base import ScreenCaptureEngine
 from vocalive.stt.base import SpeechToTextEngine
 from vocalive.tts.base import TextToSpeechEngine
 from vocalive.util.logging import get_logger, log_event
@@ -47,6 +51,7 @@ class ConversationOrchestrator:
         language_model: LanguageModel,
         tts_engine: TextToSpeechEngine,
         audio_output: AudioOutput,
+        screen_capture_engine: ScreenCaptureEngine | None = None,
         logger: logging.Logger | None = None,
         metrics: MetricsRecorder | None = None,
     ) -> None:
@@ -55,6 +60,7 @@ class ConversationOrchestrator:
         self.language_model = language_model
         self.tts_engine = tts_engine
         self.audio_output = audio_output
+        self.screen_capture_engine = screen_capture_engine
         self.logger = logger or get_logger("vocalive.orchestrator")
         self.metrics = metrics or InMemoryMetricsRecorder()
         self.session = ConversationSession(session_id=settings.session_id)
@@ -105,6 +111,8 @@ class ConversationOrchestrator:
         return True
 
     async def handle_user_speech_start(self) -> None:
+        if self._active_stage not in {"tts", "playback"}:
+            return
         await self._interrupt_active_turn(reason="speech_started")
 
     async def wait_for_idle(self) -> None:
@@ -166,12 +174,18 @@ class ConversationOrchestrator:
             stt_provider=transcription.provider,
         )
         self.session.append_user_message(transcription.text)
+        current_user_parts = await self._maybe_capture_current_user_parts(
+            user_text=transcription.text,
+            context=context,
+            cancellation=cancellation,
+        )
 
         request = ConversationRequest(
             context=context,
             messages=self._build_request_messages(
                 conversation_language=transcription.language or self.settings.conversation.language
             ),
+            current_user_parts=current_user_parts,
         )
         self._active_stage = "llm"
         with timed_stage(self.metrics, "llm", context):
@@ -282,6 +296,53 @@ class ConversationOrchestrator:
             messages.insert(0, ConversationMessage(role="system", content=language_instruction))
         return tuple(messages)
 
+    async def _maybe_capture_current_user_parts(
+        self,
+        user_text: str,
+        context: TurnContext,
+        cancellation: CancellationToken,
+    ) -> tuple[ConversationRequestPart, ...]:
+        settings = self.settings.screen_capture
+        if not settings.enabled or self.screen_capture_engine is None:
+            return tuple()
+        if not self.language_model.supports_multimodal_input:
+            return tuple()
+        if not _should_capture_screen(user_text, settings.trigger_phrases):
+            return tuple()
+
+        self._active_stage = "screen_capture"
+        try:
+            with timed_stage(self.metrics, "screen_capture", context):
+                screenshot = await self.screen_capture_engine.capture(
+                    context=context,
+                    cancellation=cancellation,
+                )
+        except TurnCancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                self.logger,
+                "screen_capture_failed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                screen_capture_provider=self.screen_capture_engine.name,
+                screen_window_name=settings.window_name,
+                error=str(exc),
+            )
+            return tuple()
+
+        log_event(
+            self.logger,
+            "screen_capture_ready",
+            session_id=context.session_id,
+            turn_id=context.turn_id,
+            screen_capture_provider=self.screen_capture_engine.name,
+            screen_window_name=settings.window_name,
+            mime_type=screenshot.mime_type,
+            byte_length=len(screenshot.data),
+        )
+        return _build_screen_capture_parts(screenshot, settings.window_name)
+
 
 def _build_conversation_language_instruction(language: str | None) -> str | None:
     normalized_language = _normalize_language(language)
@@ -313,6 +374,38 @@ def _language_name(language: str) -> str:
         "en-gb": "English",
     }
     return language_names.get(normalized_language, language)
+
+
+def _build_screen_capture_parts(
+    screenshot: ConversationInlineDataPart,
+    window_name: str | None,
+) -> tuple[ConversationRequestPart, ...]:
+    if window_name:
+        context_text = (
+            f"Configured target window: {window_name}. "
+            "The attached image is a screenshot of that window for this turn."
+        )
+    else:
+        context_text = "The attached image is a screenshot of the requested window for this turn."
+    return (
+        ConversationTextPart(text=context_text),
+        screenshot,
+    )
+
+
+def _should_capture_screen(user_text: str, trigger_phrases: tuple[str, ...]) -> bool:
+    normalized_user_text = _normalize_screen_trigger_text(user_text)
+    if not normalized_user_text:
+        return False
+    for trigger_phrase in trigger_phrases:
+        normalized_trigger = _normalize_screen_trigger_text(trigger_phrase)
+        if normalized_trigger and normalized_trigger in normalized_user_text:
+            return True
+    return False
+
+
+def _normalize_screen_trigger_text(value: str) -> str:
+    return "".join(value.lower().split())
 
 
 def _split_response_for_playback(text: str) -> tuple[str, ...]:

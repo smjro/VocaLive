@@ -40,6 +40,14 @@ DEFAULT_GEMINI_SYSTEM_INSTRUCTION = (
     "Answer the user's actual question first, then if helpful add one dry sideways observation. "
     "Stay coherent and helpful rather than turning nonsense into the main point."
 )
+DEFAULT_SCREEN_TRIGGER_PHRASES = (
+    "画面みて",
+    "画面見て",
+    "画面をみて",
+    "画面を見て",
+    "スクショみて",
+    "スクショ見て",
+)
 
 
 class QueueOverflowStrategy(str, Enum):
@@ -96,6 +104,15 @@ class GeminiSettings:
 
 
 @dataclass
+class ScreenCaptureSettings:
+    enabled: bool = False
+    window_name: str | None = None
+    trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_TRIGGER_PHRASES
+    timeout_seconds: float = 5.0
+    resize_max_edge_px: int | None = 1280
+
+
+@dataclass
 class ConversationSettings:
     language: str | None = "ja"
 
@@ -126,6 +143,7 @@ class AppSettings:
     input: InputSettings = field(default_factory=InputSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
+    screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
     aivis: AivisSpeechSettings = field(default_factory=AivisSpeechSettings)
 
@@ -189,6 +207,22 @@ class AppSettings:
                 system_instruction=_read_optional_str_with_default(
                     "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
                     default=DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+                ),
+            ),
+            screen_capture=ScreenCaptureSettings(
+                enabled=_read_bool("VOCALIVE_SCREEN_CAPTURE_ENABLED", default=False),
+                window_name=_read_optional_str_with_default(
+                    "VOCALIVE_SCREEN_WINDOW_NAME",
+                    default=None,
+                ),
+                trigger_phrases=_read_str_tuple(
+                    "VOCALIVE_SCREEN_TRIGGER_PHRASES",
+                    default=DEFAULT_SCREEN_TRIGGER_PHRASES,
+                ),
+                timeout_seconds=_read_float("VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS", default=5.0),
+                resize_max_edge_px=_read_optional_int_with_default(
+                    "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
+                    default=1280,
                 ),
             ),
             moonshine=MoonshineSettings(
@@ -276,6 +310,13 @@ def _read_optional_str_with_default(name: str, default: str | None) -> str | Non
     if not normalized_value:
         return None
     return normalized_value
+
+
+def _read_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return tuple(part.strip() for part in raw_value.split(",") if part.strip())
 
 
 def _normalize_provider_setting(kind: str, raw_value: str) -> str:
