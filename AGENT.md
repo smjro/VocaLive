@@ -13,7 +13,7 @@ Current runtime modes:
 - `stdin` shell for local development and provider wiring checks
 - `microphone` capture via `sounddevice` with local utterance detection
 - optional local browser overlay for transparent on-screen character captions
-- optional macOS application-audio capture layered onto `stdin` or `microphone`
+- optional application-audio capture layered onto `stdin` or `microphone` on macOS or Windows
 
 Current default assembly:
 
@@ -39,9 +39,11 @@ Current optional presentation path:
 Current hard constraints in the shipped app assembly:
 
 - live microphone or application-audio input requires a real STT adapter, currently `moonshine`
-- application-audio capture currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
+- application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; macOS also requires Screen Recording permission, and Windows uses WASAPI process loopback for the selected process tree while the target process stays alive
+- Windows application-audio capture depends on `csc.exe` plus a Windows build with process-loopback support
+- screen capture currently supports macOS and Windows; macOS also requires Screen Recording permission
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
-- speaker playback uses `afplay` by default on macOS unless `VOCALIVE_SPEAKER_COMMAND` is set
+- speaker playback uses `afplay` by default on macOS and PowerShell `SoundPlayer` on Windows unless `VOCALIVE_SPEAKER_COMMAND` is set
 - the overlay is local browser UI only; it is driven by playback-chunk events rather than model token streaming
 
 ## Current behavior that changes must preserve

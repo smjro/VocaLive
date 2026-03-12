@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import array
-import audioop
 import math
 import sys
 from abc import ABC, abstractmethod
@@ -118,10 +117,7 @@ class AdaptiveEnergySpeechDetector(SpeechDetector):
         return is_speech
 
     def _preemphasized_rms(self, chunk: bytes) -> float:
-        samples = array.array("h")
-        samples.frombytes(chunk)
-        if sys.byteorder != "little":
-            samples.byteswap()
+        samples = _read_pcm16_samples(chunk)
         if not samples:
             return 0.0
         total = 0.0
@@ -135,10 +131,7 @@ class AdaptiveEnergySpeechDetector(SpeechDetector):
         return math.sqrt(total / len(samples)) / _PCM16_MAX_ABS
 
     def _waveform_texture(self, chunk: bytes, raw_energy: float) -> float:
-        samples = array.array("h")
-        samples.frombytes(chunk)
-        if sys.byteorder != "little":
-            samples.byteswap()
+        samples = _read_pcm16_samples(chunk)
         if len(samples) < 2:
             return self.minimum_texture
         total_delta = 0.0
@@ -169,6 +162,33 @@ class AdaptiveEnergySpeechDetector(SpeechDetector):
 def _normalized_rms(chunk: bytes, sample_width_bytes: int) -> float:
     if not chunk:
         return 0.0
+    if sample_width_bytes <= 0:
+        raise ValueError("sample_width_bytes must be greater than zero")
+    usable_length = len(chunk) - (len(chunk) % sample_width_bytes)
+    if usable_length == 0:
+        return 0.0
     max_amplitude = float(1 << (8 * sample_width_bytes - 1))
-    rms = audioop.rms(chunk, sample_width_bytes)
-    return rms / max_amplitude
+    if sample_width_bytes == 2:
+        samples = _read_pcm16_samples(chunk[:usable_length])
+    else:
+        samples = [
+            int.from_bytes(
+                chunk[offset : offset + sample_width_bytes],
+                byteorder="little",
+                signed=True,
+            )
+            for offset in range(0, usable_length, sample_width_bytes)
+        ]
+    if not samples:
+        return 0.0
+    mean_square = sum(float(sample) * float(sample) for sample in samples) / len(samples)
+    return math.sqrt(mean_square) / max_amplitude
+
+
+def _read_pcm16_samples(chunk: bytes) -> array.array:
+    usable_length = len(chunk) - (len(chunk) % 2)
+    samples = array.array("h")
+    samples.frombytes(chunk[:usable_length])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples

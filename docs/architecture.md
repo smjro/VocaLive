@@ -20,7 +20,7 @@ The current entry point supports two primary input modes plus an optional extra 
 2. `microphone`
    `MicrophoneAudioInput` captures `int16` PCM through `sounddevice`, applies preroll / speech-hold / silence thresholds, and emits utterance-sized `AudioSegment` instances.
 3. `application audio` (optional)
-   `MacOSApplicationAudioInput` captures one running macOS app through a ScreenCaptureKit helper, applies adaptive speech detection by default plus local utterance segmentation, and emits utterance-sized `AudioSegment` instances tagged as application audio. The default `context_only` mode stores those transcripts as session context without immediate assistant replies; `respond` opt-in restores live-turn behavior.
+   `MacOSApplicationAudioInput` captures one running macOS app through a ScreenCaptureKit helper, while `WindowsApplicationAudioInput` resolves a named Windows process and records WASAPI process loopback for that process tree while the selected process remains alive. Both apply adaptive speech detection by default plus local utterance segmentation and emit utterance-sized `AudioSegment` instances tagged as application audio. The default `context_only` mode stores those transcripts as session context without immediate assistant replies; `respond` opt-in restores live-turn behavior.
 
 ## Current runtime flow
 
@@ -76,12 +76,14 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `audio/devices.py` | Input device resolution, default-device lookup, and headset/external microphone preference |
 | `audio/input.py` | Stdin-like queue input, microphone capture, combined live-input fan-in, utterance accumulation, and speech-start callbacks |
 | `audio/macos_application.py` | macOS application-audio helper build, app lookup, capture, and utterance emission |
+| `audio/windows_application.py` | Windows application-audio helper build, process lookup, process-loopback capture, and utterance emission |
 | `audio/speech_detection.py` | Fixed-threshold and adaptive speech detectors used before utterance segmentation |
 | `audio/output.py` | Playback abstraction, in-memory output, and external speaker command playback |
 | `audio/vad.py` | Turn detection abstraction; current live path uses fixed-silence detection |
 | `stt/` | Speech-to-text interface and adapters, including Moonshine application-audio enhancement |
 | `llm/` | Language model interface and adapters |
 | `screen/` | Optional named-window screenshot capture adapters |
+| `screen/windows.py` | Windows window lookup, helper build, and named-window PNG capture |
 | `tts/` | Text-to-speech interface and adapters |
 | `pipeline/queues.py` | Bounded ingress queue with explicit overflow policy |
 | `pipeline/interruption.py` | Cancellation token and active-turn interruption control |
@@ -150,7 +152,8 @@ Optional real adapters:
 
 - `MoonshineSpeechToTextEngine`
 - `GeminiLanguageModel`
-- `MacOSFullscreenScreenCapture`
+- `MacOSWindowScreenCapture`
+- `WindowsWindowScreenCapture`
 - `AivisSpeechTextToSpeechEngine`
 - `SpeakerAudioOutput`
 
@@ -166,12 +169,14 @@ Current compatibility constraints:
 
 - microphone or application-audio input is rejected when STT is still `mock`
 - application-audio input is rejected unless `VOCALIVE_APP_AUDIO_TARGET` is configured
-- application-audio input currently supports macOS only and depends on Screen Recording permission plus a first-run helper build
+- application-audio input currently supports macOS and Windows
+- on macOS, application-audio capture depends on Screen Recording permission plus a first-run helper build
+- on Windows, application-audio capture depends on `csc.exe` plus a Windows build with WASAPI process-loopback support and isolates the selected process tree from other audible apps on the same device
 - speaker output is rejected unless TTS is `aivis`
 - screen capture is rejected unless the model provider is `gemini`
 - screen capture is rejected unless `VOCALIVE_SCREEN_WINDOW_NAME` is configured
-- screen capture currently supports macOS only and resolves the first on-screen window that matches the configured title or owner name
-- speaker playback depends on an external playback command and defaults to `afplay` on macOS
+- screen capture currently supports macOS and Windows and resolves the first on-screen window that matches the configured title or owner name
+- speaker playback depends on an external playback command and defaults to `afplay` on macOS and PowerShell `SoundPlayer` on Windows
 
 The stdin shell still works with the real-provider assembly because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
 

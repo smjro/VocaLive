@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import shlex
 import shutil
+import sys
 import tempfile
 from abc import ABC, abstractmethod
 from math import ceil
@@ -122,13 +123,30 @@ class SpeakerAudioOutput(AudioOutput):
 
 
 def _default_playback_command() -> list[str]:
-    afplay = shutil.which("afplay")
-    if afplay is None:
-        raise RuntimeError(
-            "speaker output requires a playback command. "
-            "On macOS `afplay` is used by default; otherwise set VOCALIVE_SPEAKER_COMMAND."
+    if sys.platform == "darwin":
+        afplay = shutil.which("afplay")
+        if afplay is not None:
+            return [afplay, "{path}"]
+    elif sys.platform == "win32":
+        powershell = (
+            shutil.which("powershell.exe")
+            or shutil.which("powershell")
+            or shutil.which("pwsh.exe")
+            or shutil.which("pwsh")
         )
-    return [afplay, "{path}"]
+        if powershell is not None:
+            return [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(New-Object System.Media.SoundPlayer '{path}').PlaySync()",
+            ]
+    raise RuntimeError(
+        "speaker output requires a playback command. "
+        "On macOS `afplay` is used by default; on Windows PowerShell "
+        "`SoundPlayer` is used by default; otherwise set VOCALIVE_SPEAKER_COMMAND."
+    )
 
 
 def parse_playback_command(command: str | None) -> tuple[str, ...] | None:

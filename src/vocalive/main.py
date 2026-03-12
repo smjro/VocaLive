@@ -4,7 +4,6 @@ import asyncio
 import sys
 
 from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudioInput
-from vocalive.audio.macos_application import MacOSApplicationAudioInput
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
 from vocalive.config.settings import (
     AppSettings,
@@ -17,13 +16,15 @@ from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
 from vocalive.pipeline.events import ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
-from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.mock import MockTextToSpeechEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
 from vocalive.ui.overlay import OverlayServer
-from vocalive.util.logging import configure_logging
+from vocalive.util.logging import configure_logging, get_logger, log_event
+
+
+logger = get_logger(__name__)
 
 
 async def run_cli() -> int:
@@ -108,11 +109,12 @@ def build_orchestrator(
             raise ValueError(
                 "screen capture input currently requires VOCALIVE_SCREEN_WINDOW_NAME"
             )
-        if sys.platform != "darwin":
+        screen_capture_engine_class = _screen_capture_engine_class_for_platform(sys.platform)
+        if screen_capture_engine_class is None:
             raise ValueError(
-                "screen capture input currently supports macOS only"
+                "screen capture input currently supports macOS and Windows only"
             )
-        screen_capture_engine = MacOSWindowScreenCapture(
+        screen_capture_engine = screen_capture_engine_class(
             window_name=settings.screen_capture.window_name,
             timeout_seconds=settings.screen_capture.timeout_seconds,
             resize_max_edge_px=settings.screen_capture.resize_max_edge_px,
@@ -151,12 +153,19 @@ def build_audio_input(settings: AppSettings) -> AudioInput | None:
             raise ValueError(
                 "application audio input currently requires VOCALIVE_APP_AUDIO_TARGET"
             )
-        if sys.platform != "darwin":
+        application_audio_input_class = _application_audio_input_class_for_platform(sys.platform)
+        if application_audio_input_class is None:
             raise ValueError(
-                "application audio input currently supports macOS only"
+                "application audio input currently supports macOS and Windows only"
+            )
+        if sys.platform == "win32":
+            log_event(
+                logger,
+                "windows_application_audio_loopback_enabled",
+                output_provider=settings.output.provider,
             )
         live_inputs.append(
-            MacOSApplicationAudioInput(
+            application_audio_input_class(
                 target=settings.application_audio.target,
                 sample_rate_hz=settings.application_audio.sample_rate_hz,
                 channels=settings.application_audio.channels,
@@ -231,6 +240,32 @@ def _uses_live_audio_input(settings: AppSettings) -> bool:
         settings.input.provider == InputProvider.MICROPHONE
         or settings.application_audio.enabled
     )
+
+
+def _application_audio_input_class_for_platform(
+    platform: str,
+) -> type[AudioInput] | None:
+    if platform == "darwin":
+        from vocalive.audio.macos_application import MacOSApplicationAudioInput
+
+        return MacOSApplicationAudioInput
+    if platform == "win32":
+        from vocalive.audio.windows_application import WindowsApplicationAudioInput
+
+        return WindowsApplicationAudioInput
+    return None
+
+
+def _screen_capture_engine_class_for_platform(platform: str):
+    if platform == "darwin":
+        from vocalive.screen.macos import MacOSWindowScreenCapture
+
+        return MacOSWindowScreenCapture
+    if platform == "win32":
+        from vocalive.screen.windows import WindowsWindowScreenCapture
+
+        return WindowsWindowScreenCapture
+    return None
 
 
 def main() -> int:

@@ -43,7 +43,7 @@ Before closing a documentation-related change, verify:
 2. Provider support and compatibility constraints match the actual assembly code.
 3. Configuration names and defaults match `src/vocalive/config/settings.py`.
 4. Coverage statements still reflect what exists in `tests/unit/`.
-5. Platform-specific or optional requirements such as `afplay` and `moonshine-voice` are called out explicitly.
+5. Platform-specific or optional requirements such as `afplay`, PowerShell playback, `csc.exe`, and `moonshine-voice` are called out explicitly.
 6. Overlay behavior, transparency, and asset paths still match `src/vocalive/ui/overlay.py`.
 7. Future ideas are labeled as future work, not present-tense behavior.
 

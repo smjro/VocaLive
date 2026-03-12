@@ -104,7 +104,7 @@ class MacOSWindowHelperTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(window_id, 42)
         create_subprocess_exec.assert_awaited_once_with(
-            "/tmp/vocalive-window-query",
+            str(Path("/tmp/vocalive-window-query")),
             stdout=unittest.mock.ANY,
             stderr=unittest.mock.ANY,
         )

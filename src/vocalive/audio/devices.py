@@ -13,16 +13,21 @@ _EXTERNAL_DEVICE_ALIASES = {
     "headphones",
 }
 _HEADSET_DEVICE_KEYWORDS = (
-    "airpods",
-    "bluetooth",
     "earbud",
     "earbuds",
-    "hands free",
-    "handsfree",
     "headphone",
     "headphones",
     "headset",
     "wireless",
+)
+_LOW_FIDELITY_COMMUNICATION_DEVICE_KEYWORDS = (
+    "ag audio",
+    "hands free",
+    "handsfree",
+)
+_LOW_FIDELITY_BLUETOOTH_DEVICE_KEYWORDS = (
+    "airpods",
+    "bluetooth",
 )
 _EXTERNAL_DEVICE_KEYWORDS = (
     "adapter",
@@ -223,11 +228,27 @@ def _select_external_input_device(
 def _external_device_confidence(normalized_name: str) -> int:
     if _looks_builtin_input(normalized_name):
         return -1
+    if _looks_low_fidelity_communication_input(normalized_name):
+        return 0
     if any(keyword in normalized_name for keyword in _HEADSET_DEVICE_KEYWORDS):
-        return 2
-    if any(keyword in normalized_name for keyword in _EXTERNAL_DEVICE_KEYWORDS):
         return 1
+    if any(keyword in normalized_name for keyword in _EXTERNAL_DEVICE_KEYWORDS):
+        return 2
+    if any(keyword in normalized_name for keyword in _LOW_FIDELITY_BLUETOOTH_DEVICE_KEYWORDS):
+        return 0
     return 0
+
+
+def _looks_low_fidelity_communication_input(normalized_name: str) -> bool:
+    if any(
+        keyword in normalized_name
+        for keyword in _LOW_FIDELITY_COMMUNICATION_DEVICE_KEYWORDS
+    ):
+        return True
+    return any(
+        keyword in normalized_name
+        for keyword in _LOW_FIDELITY_BLUETOOTH_DEVICE_KEYWORDS
+    ) and any(keyword in normalized_name for keyword in _HEADSET_DEVICE_KEYWORDS)
 
 
 def _looks_builtin_input(normalized_name: str) -> bool:
