@@ -152,16 +152,18 @@ def _build_thinking_config(
 
 def _coalesce_messages(messages: tuple[ConversationMessage, ...]) -> list[dict[str, object]]:
     contents: list[dict[str, object]] = []
+    last_message_role: str | None = None
     for message in messages:
         if message.role == "system":
             continue
         role = "model" if message.role == "assistant" else "user"
-        if contents and contents[-1]["role"] == role:
+        if contents and contents[-1]["role"] == role and last_message_role == message.role:
             parts = contents[-1]["parts"]
             assert isinstance(parts, list)
             parts.append({"text": message.content})
-            continue
-        contents.append({"role": role, "parts": [{"text": message.content}]})
+        else:
+            contents.append({"role": role, "parts": [{"text": message.content}]})
+        last_message_role = message.role
     return contents
 
 

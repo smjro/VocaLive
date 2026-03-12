@@ -3,9 +3,15 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from vocalive.audio.input import AudioInput, MicrophoneAudioInput
+from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudioInput
+from vocalive.audio.macos_application import MacOSApplicationAudioInput
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
-from vocalive.config.settings import AppSettings, InputProvider, OutputProvider
+from vocalive.config.settings import (
+    AppSettings,
+    ApplicationAudioMode,
+    InputProvider,
+    OutputProvider,
+)
 from vocalive.llm.echo import EchoLanguageModel
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
@@ -36,14 +42,18 @@ async def run_cli() -> int:
 
 
 def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
-    if settings.input.provider == InputProvider.MICROPHONE and settings.stt_provider == "mock":
+    if _uses_live_audio_input(settings) and settings.stt_provider == "mock":
         raise ValueError(
-            "microphone input requires a real STT adapter; set VOCALIVE_STT_PROVIDER=moonshine"
+            "microphone/application audio input requires a real STT adapter; "
+            "set VOCALIVE_STT_PROVIDER=moonshine"
         )
     if settings.stt_provider == "moonshine":
         stt_engine = MoonshineSpeechToTextEngine(
             model_name=settings.moonshine.model_name,
             default_language=settings.conversation.language,
+            application_audio_enhancement_enabled=(
+                settings.application_audio.stt_enhancement_enabled
+            ),
         )
     else:
         stt_engine = MockSpeechToTextEngine()
@@ -108,21 +118,56 @@ def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
 
 
 def build_audio_input(settings: AppSettings) -> AudioInput | None:
-    if settings.input.provider == InputProvider.STDIN:
+    live_inputs: list[AudioInput] = []
+    if settings.input.provider == InputProvider.MICROPHONE:
+        live_inputs.append(
+            MicrophoneAudioInput(
+                sample_rate_hz=settings.input.sample_rate_hz,
+                channels=settings.input.channels,
+                block_duration_ms=settings.input.block_duration_ms,
+                speech_threshold=settings.input.speech_threshold,
+                pre_speech_ms=settings.input.pre_speech_ms,
+                speech_hold_ms=settings.input.speech_hold_ms,
+                silence_threshold_ms=settings.input.silence_threshold_ms,
+                min_utterance_ms=settings.input.min_utterance_ms,
+                max_utterance_ms=settings.input.max_utterance_ms,
+                device=settings.input.device,
+                prefer_external_device=settings.input.prefer_external_device,
+            )
+        )
+    if settings.application_audio.enabled:
+        if not settings.application_audio.target:
+            raise ValueError(
+                "application audio input currently requires VOCALIVE_APP_AUDIO_TARGET"
+            )
+        if sys.platform != "darwin":
+            raise ValueError(
+                "application audio input currently supports macOS only"
+            )
+        live_inputs.append(
+            MacOSApplicationAudioInput(
+                target=settings.application_audio.target,
+                sample_rate_hz=settings.application_audio.sample_rate_hz,
+                channels=settings.application_audio.channels,
+                block_duration_ms=settings.application_audio.block_duration_ms,
+                speech_threshold=settings.application_audio.speech_threshold,
+                pre_speech_ms=settings.application_audio.pre_speech_ms,
+                speech_hold_ms=settings.application_audio.speech_hold_ms,
+                silence_threshold_ms=settings.application_audio.silence_threshold_ms,
+                min_utterance_ms=settings.application_audio.min_utterance_ms,
+                max_utterance_ms=settings.application_audio.max_utterance_ms,
+                timeout_seconds=settings.application_audio.timeout_seconds,
+                adaptive_vad_enabled=settings.application_audio.adaptive_vad_enabled,
+                speech_start_events_enabled=(
+                    settings.application_audio.mode is ApplicationAudioMode.RESPOND
+                ),
+            )
+        )
+    if not live_inputs:
         return None
-    return MicrophoneAudioInput(
-        sample_rate_hz=settings.input.sample_rate_hz,
-        channels=settings.input.channels,
-        block_duration_ms=settings.input.block_duration_ms,
-        speech_threshold=settings.input.speech_threshold,
-        pre_speech_ms=settings.input.pre_speech_ms,
-        speech_hold_ms=settings.input.speech_hold_ms,
-        silence_threshold_ms=settings.input.silence_threshold_ms,
-        min_utterance_ms=settings.input.min_utterance_ms,
-        max_utterance_ms=settings.input.max_utterance_ms,
-        device=settings.input.device,
-        prefer_external_device=settings.input.prefer_external_device,
-    )
+    if len(live_inputs) == 1:
+        return live_inputs[0]
+    return CombinedAudioInput(live_inputs)
 
 
 async def _run_stdin_shell(orchestrator: ConversationOrchestrator) -> int:
@@ -148,12 +193,12 @@ async def _run_microphone_loop(
     orchestrator: ConversationOrchestrator,
     audio_input: AudioInput,
 ) -> int:
-    if isinstance(audio_input, MicrophoneAudioInput):
-        audio_input.set_speech_start_handler(orchestrator.handle_user_speech_start)
-        selected_device = await audio_input.start()
-        print(f"VocaLive microphone mode. Using {selected_device}. Ctrl-C to exit.")
+    audio_input.set_speech_start_handler(orchestrator.handle_user_speech_start)
+    selected_input = await audio_input.start()
+    if selected_input:
+        print(f"VocaLive live audio mode. Using {selected_input}. Ctrl-C to exit.")
     else:
-        print("VocaLive microphone mode. Speak into the selected input device. Ctrl-C to exit.")
+        print("VocaLive live audio mode. Ctrl-C to exit.")
     while True:
         segment = await audio_input.read()
         if segment is None:
@@ -162,6 +207,13 @@ async def _run_microphone_loop(
         if not accepted:
             print("assistant> queue full, utterance dropped")
             continue
+
+
+def _uses_live_audio_input(settings: AppSettings) -> bool:
+    return (
+        settings.input.provider == InputProvider.MICROPHONE
+        or settings.application_audio.enabled
+    )
 
 
 def main() -> int:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from vocalive.audio.output import AudioOutput
-from vocalive.config.settings import AppSettings
+from vocalive.config.settings import AppSettings, ApplicationAudioMode
 from vocalive.llm.base import LanguageModel
 from vocalive.models import (
     AssistantResponse,
@@ -68,8 +69,13 @@ class ConversationOrchestrator:
             maxsize=settings.queue.ingress_maxsize,
             overflow_strategy=settings.queue.overflow_strategy,
         )
+        self._application_context_queue = BoundedAsyncQueue[AudioSegment](
+            maxsize=settings.queue.ingress_maxsize,
+            overflow_strategy=settings.queue.overflow_strategy,
+        )
         self._interruptions = InterruptionController()
         self._idle_event = asyncio.Event()
+        self._work_available = asyncio.Event()
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
@@ -94,20 +100,31 @@ class ConversationOrchestrator:
             pass
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
+        if self._should_capture_application_audio_as_context(segment):
+            return await self.submit_application_context(segment)
         self._idle_event.clear()
         await self._interrupt_active_turn(reason="utterance_submitted")
         accepted = await self._queue.put(segment)
         if not accepted:
-            log_event(
-                self.logger,
-                "queue_overflow",
-                session_id=self.session.session_id,
-                queue_size=self._queue.qsize(),
-                strategy=self.settings.queue.overflow_strategy.value,
-            )
-            if not self._interruptions.has_active_turn and self._queue.empty():
-                self._idle_event.set()
+            self._log_queue_overflow(queue_name="conversation", queue_size=self._queue.qsize())
+            self._set_idle_if_drained()
             return False
+        self._work_available.set()
+        return True
+
+    async def submit_application_context(self, segment: AudioSegment) -> bool:
+        if segment.source != "application_audio":
+            raise ValueError("application context submission requires application_audio segments")
+        self._idle_event.clear()
+        accepted = await self._application_context_queue.put(segment)
+        if not accepted:
+            self._log_queue_overflow(
+                queue_name="application_context",
+                queue_size=self._application_context_queue.qsize(),
+            )
+            self._set_idle_if_drained()
+            return False
+        self._work_available.set()
         return True
 
     async def handle_user_speech_start(self) -> None:
@@ -120,7 +137,7 @@ class ConversationOrchestrator:
 
     async def _run(self) -> None:
         while True:
-            segment = await self._queue.get()
+            segment, task_done = await self._await_next_segment()
             self._turn_counter += 1
             context = TurnContext(
                 session_id=self.session.session_id,
@@ -151,9 +168,8 @@ class ConversationOrchestrator:
                     self._active_context = None
                     self._active_stage = None
                 self._interruptions.clear_if_current(cancellation)
-                self._queue.task_done()
-                if self._queue.empty() and not self._interruptions.has_active_turn:
-                    self._idle_event.set()
+                task_done()
+                self._set_idle_if_drained()
 
     async def _process_turn(
         self,
@@ -172,13 +188,28 @@ class ConversationOrchestrator:
             turn_id=context.turn_id,
             text=transcription.text,
             stt_provider=transcription.provider,
+            audio_source=segment.source,
+            audio_source_label=segment.source_label,
         )
-        self.session.append_user_message(transcription.text)
-        current_user_parts = await self._maybe_capture_current_user_parts(
-            user_text=transcription.text,
-            context=context,
-            cancellation=cancellation,
-        )
+        session_message_text = _build_session_message_text(segment, transcription.text)
+        if segment.source == "application_audio":
+            self.session.append_application_message(session_message_text)
+            if self._should_capture_application_audio_as_context(segment):
+                self._active_stage = None
+                self.metrics.record_duration(
+                    stage="turn_total",
+                    duration_ms=monotonic_ms() - turn_started_ms,
+                    context=context,
+                )
+                return
+            current_user_parts = tuple()
+        else:
+            self.session.append_user_message(session_message_text)
+            current_user_parts = await self._maybe_capture_current_user_parts(
+                user_text=transcription.text,
+                context=context,
+                cancellation=cancellation,
+            )
 
         request = ConversationRequest(
             context=context,
@@ -209,6 +240,44 @@ class ConversationOrchestrator:
             duration_ms=monotonic_ms() - turn_started_ms,
             context=context,
         )
+
+    async def _await_next_segment(self) -> tuple[AudioSegment, Callable[[], None]]:
+        while True:
+            segment = self._queue.get_nowait()
+            if segment is not None:
+                return segment, self._queue.task_done
+            segment = self._application_context_queue.get_nowait()
+            if segment is not None:
+                return segment, self._application_context_queue.task_done
+            self._work_available.clear()
+            if not self._queue.empty() or not self._application_context_queue.empty():
+                self._work_available.set()
+                continue
+            await self._work_available.wait()
+
+    def _should_capture_application_audio_as_context(self, segment: AudioSegment) -> bool:
+        return (
+            segment.source == "application_audio"
+            and self.settings.application_audio.mode is ApplicationAudioMode.CONTEXT_ONLY
+        )
+
+    def _log_queue_overflow(self, queue_name: str, queue_size: int) -> None:
+        log_event(
+            self.logger,
+            "queue_overflow",
+            session_id=self.session.session_id,
+            queue_name=queue_name,
+            queue_size=queue_size,
+            strategy=self.settings.queue.overflow_strategy.value,
+        )
+
+    def _set_idle_if_drained(self) -> None:
+        if (
+            self._queue.empty()
+            and self._application_context_queue.empty()
+            and not self._interruptions.has_active_turn
+        ):
+            self._idle_event.set()
 
     async def _play_response(
         self,
@@ -353,6 +422,14 @@ def _build_conversation_language_instruction(language: str | None) -> str | None
         f"The conversation language is {language_name}. "
         f"Reply in {language_name} unless the user explicitly asks to switch languages."
     )
+
+
+def _build_session_message_text(segment: AudioSegment, transcription_text: str) -> str:
+    normalized_text = transcription_text.strip()
+    if segment.source != "application_audio":
+        return normalized_text
+    source_label = (segment.source_label or "unknown application").strip() or "unknown application"
+    return f"Application audio ({source_label}): {normalized_text}"
 
 
 def _normalize_language(language: str | None) -> str | None:

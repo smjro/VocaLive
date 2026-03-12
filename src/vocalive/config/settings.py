@@ -65,6 +65,11 @@ class OutputProvider(str, Enum):
     SPEAKER = "speaker"
 
 
+class ApplicationAudioMode(str, Enum):
+    CONTEXT_ONLY = "context_only"
+    RESPOND = "respond"
+
+
 @dataclass
 class QueueSettings:
     ingress_maxsize: int = 4
@@ -85,6 +90,25 @@ class InputSettings:
     max_utterance_ms: float = 15_000.0
     device: str | int | None = None
     prefer_external_device: bool = True
+
+
+@dataclass
+class ApplicationAudioSettings:
+    enabled: bool = False
+    mode: ApplicationAudioMode = ApplicationAudioMode.CONTEXT_ONLY
+    target: str | None = None
+    sample_rate_hz: int = 16_000
+    channels: int = 1
+    block_duration_ms: float = 40.0
+    speech_threshold: float = 0.02
+    pre_speech_ms: float = 200.0
+    speech_hold_ms: float = 320.0
+    silence_threshold_ms: float = 650.0
+    min_utterance_ms: float = 250.0
+    max_utterance_ms: float = 15_000.0
+    timeout_seconds: float = 10.0
+    adaptive_vad_enabled: bool = True
+    stt_enhancement_enabled: bool = True
 
 
 @dataclass
@@ -141,6 +165,7 @@ class AppSettings:
     queue: QueueSettings = field(default_factory=QueueSettings)
     conversation: ConversationSettings = field(default_factory=ConversationSettings)
     input: InputSettings = field(default_factory=InputSettings)
+    application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
@@ -186,6 +211,35 @@ class AppSettings:
                 device=_read_optional_device("VOCALIVE_MIC_DEVICE"),
                 prefer_external_device=_read_bool(
                     "VOCALIVE_MIC_PREFER_EXTERNAL",
+                    default=True,
+                ),
+            ),
+            application_audio=ApplicationAudioSettings(
+                enabled=_read_bool("VOCALIVE_APP_AUDIO_ENABLED", default=False),
+                mode=_read_application_audio_mode(
+                    "VOCALIVE_APP_AUDIO_MODE",
+                    default=ApplicationAudioMode.CONTEXT_ONLY,
+                ),
+                target=_read_optional_str_with_default(
+                    "VOCALIVE_APP_AUDIO_TARGET",
+                    default=None,
+                ),
+                sample_rate_hz=_read_int("VOCALIVE_APP_AUDIO_SAMPLE_RATE", default=16_000),
+                channels=_read_int("VOCALIVE_APP_AUDIO_CHANNELS", default=1),
+                block_duration_ms=_read_float("VOCALIVE_APP_AUDIO_BLOCK_MS", default=40.0),
+                speech_threshold=_read_float("VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD", default=0.02),
+                pre_speech_ms=_read_float("VOCALIVE_APP_AUDIO_PRE_SPEECH_MS", default=200.0),
+                speech_hold_ms=_read_float("VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS", default=320.0),
+                silence_threshold_ms=_read_float("VOCALIVE_APP_AUDIO_SILENCE_MS", default=650.0),
+                min_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS", default=250.0),
+                max_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS", default=15_000.0),
+                timeout_seconds=_read_float("VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS", default=10.0),
+                adaptive_vad_enabled=_read_bool(
+                    "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
+                    default=True,
+                ),
+                stt_enhancement_enabled=_read_bool(
+                    "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
                     default=True,
                 ),
             ),
@@ -317,6 +371,28 @@ def _read_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     if raw_value is None:
         return default
     return tuple(part.strip() for part in raw_value.split(",") if part.strip())
+
+
+def _read_application_audio_mode(
+    name: str,
+    default: ApplicationAudioMode,
+) -> ApplicationAudioMode:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized_value = "_".join(raw_value.strip().lower().replace("-", " ").split())
+    aliases = {
+        "context_only": ApplicationAudioMode.CONTEXT_ONLY,
+        "respond": ApplicationAudioMode.RESPOND,
+    }
+    mode = aliases.get(normalized_value)
+    if mode is None:
+        supported_values = ", ".join(mode.value for mode in ApplicationAudioMode)
+        raise ValueError(
+            f"Unsupported application audio mode: {raw_value!r}. "
+            f"Supported values: {supported_values}"
+        )
+    return mode
 
 
 def _normalize_provider_setting(kind: str, raw_value: str) -> str:

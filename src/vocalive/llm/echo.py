@@ -28,7 +28,7 @@ class EchoLanguageModel(LanguageModel):
         latest_user_message = next(
             message.content
             for message in reversed(request.messages)
-            if message.role == "user"
+            if message.role in {"user", "application"}
         )
         return AssistantResponse(
             text=f"{self.prefix}: {latest_user_message}",
