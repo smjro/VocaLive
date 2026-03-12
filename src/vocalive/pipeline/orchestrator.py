@@ -27,6 +27,7 @@ from vocalive.pipeline.interruption import (
     TurnCancelledError,
 )
 from vocalive.pipeline.queues import BoundedAsyncQueue
+from vocalive.pipeline.reply_policy import ReplyDecision, decide_reply
 from vocalive.pipeline.session import ConversationSession
 from vocalive.screen.base import ScreenCaptureEngine
 from vocalive.stt.base import SpeechToTextEngine
@@ -86,6 +87,7 @@ class ConversationOrchestrator:
         self._turn_counter = 0
         self._active_context: TurnContext | None = None
         self._active_stage: str | None = None
+        self._last_assistant_response_ms: float | None = None
 
     async def start(self) -> None:
         if self._worker_task is not None:
@@ -282,6 +284,27 @@ class ConversationOrchestrator:
             current_user_parts = tuple()
         else:
             self.session.append_user_message(session_message_text)
+            reply_decision = self._decide_user_reply(
+                transcription_text=transcription.text,
+                segment=segment,
+            )
+            if not reply_decision.should_reply:
+                log_event(
+                    self.logger,
+                    "response_suppressed",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    reason=reply_decision.reason,
+                    text=transcription.text,
+                    audio_source=segment.source,
+                )
+                self._active_stage = None
+                self.metrics.record_duration(
+                    stage="turn_total",
+                    duration_ms=monotonic_ms() - turn_started_ms,
+                    context=context,
+                )
+                return
             current_user_parts = await self._maybe_capture_current_user_parts(
                 user_text=transcription.text,
                 context=context,
@@ -311,6 +334,7 @@ class ConversationOrchestrator:
         await self._play_response(response=response, context=context, cancellation=cancellation)
 
         self.session.append_assistant_message(response.text)
+        self._last_assistant_response_ms = monotonic_ms()
         self._active_stage = None
         self.metrics.record_duration(
             stage="turn_total",
@@ -457,6 +481,26 @@ class ConversationOrchestrator:
         if language_instruction is not None:
             messages.insert(0, ConversationMessage(role="system", content=language_instruction))
         return tuple(messages)
+
+    def _decide_user_reply(
+        self,
+        transcription_text: str,
+        segment: AudioSegment,
+    ) -> ReplyDecision:
+        if (
+            self.settings.input.provider is not InputProvider.MICROPHONE
+            or segment.source != "user"
+        ):
+            return ReplyDecision(
+                should_reply=True,
+                reason="policy_not_applicable",
+            )
+        return decide_reply(
+            transcription_text,
+            settings=self.settings.reply,
+            last_assistant_response_ms=self._last_assistant_response_ms,
+            now_ms=monotonic_ms(),
+        )
 
     async def _maybe_capture_current_user_parts(
         self,
