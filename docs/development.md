@@ -39,6 +39,10 @@ The current entry point is `src/vocalive/main.py`.
 - application-audio capture uses adaptive energy-based VAD by default and can fall back to fixed thresholding with `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false`
 - Moonshine applies low-frequency-preserving speech enhancement to application-audio segments before transcription unless `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_OVERLAY_ENABLED=true` starts a local transparent browser overlay that shows the character and assistant speech text
+- when `VOCALIVE_OVERLAY_AUTO_OPEN=true`, startup asks the system browser to open the overlay automatically
+- the overlay shows captions only while audio is actively playing and clears them on completion or interruption
+- place custom character art at `src/vocalive/ui/assets/character.png`; when the file is missing the built-in vector character is used
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking, so speech onset can stop stale playback immediately
@@ -98,6 +102,12 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | `gemini` is supported; aliases such as `google gemini` are accepted |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` is supported; aliases such as `aivis speech` are accepted |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Starts the local transparent browser overlay with speech-only captions |
+| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Bind host/interface for the overlay server |
+| `VOCALIVE_OVERLAY_PORT` | `8765` | Bind port for the overlay server |
+| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Opens the overlay page in the default browser on startup |
+| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Injects a per-turn language instruction before the LLM call; set empty to disable |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept raw in LLM requests before older conversation is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the bounded earlier-conversation summary inserted ahead of the recent raw window |
@@ -141,7 +151,9 @@ Useful working combinations today:
    `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
 3. Full live voice path
    `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
-4. Game/video commentary path
+4. Live voice path with overlay
+   `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
+5. Game/video commentary path
    `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` + `gemini` + `aivis` + `memory` or `speaker`
    default app-audio behavior is `VOCALIVE_APP_AUDIO_MODE=context_only`; set `VOCALIVE_APP_AUDIO_MODE=respond` only when immediate replies to app dialogue are desired
 
@@ -178,6 +190,8 @@ Current unit tests cover:
 - Aivis speaker/style resolution and WAV metadata parsing
 - single-turn orchestration flow
 - interruption of in-flight playback by newer speech
+- UI-event emission for caption overlays and interruption handling
+- overlay rendering and character-asset fallback
 - session history rules for interrupted turns and application-audio context commits
 - sentence-by-sentence playback chunking and TTS prefetch behavior
 - structured logging output

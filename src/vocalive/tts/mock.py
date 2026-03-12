@@ -10,9 +10,15 @@ from vocalive.tts.base import TextToSpeechEngine
 class MockTextToSpeechEngine(TextToSpeechEngine):
     name = "mock-tts"
 
-    def __init__(self, delay_seconds: float = 0.0, sample_rate_hz: int = 24_000) -> None:
+    def __init__(
+        self,
+        delay_seconds: float = 0.0,
+        sample_rate_hz: int = 24_000,
+        ms_per_character: float = 72.0,
+    ) -> None:
         self.delay_seconds = delay_seconds
         self.sample_rate_hz = sample_rate_hz
+        self.ms_per_character = ms_per_character
 
     async def synthesize(
         self,
@@ -31,4 +37,5 @@ class MockTextToSpeechEngine(TextToSpeechEngine):
             provider=self.name,
             audio=text.encode("utf-8"),
             sample_rate_hz=self.sample_rate_hz,
+            duration_ms=max(360.0, len(text) * self.ms_per_character),
         )

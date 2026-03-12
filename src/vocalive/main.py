@@ -15,23 +15,29 @@ from vocalive.config.settings import (
 from vocalive.llm.echo import EchoLanguageModel
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
+from vocalive.pipeline.events import ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
 from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.mock import MockTextToSpeechEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
+from vocalive.ui.overlay import OverlayServer
 from vocalive.util.logging import configure_logging
 
 
 async def run_cli() -> int:
     settings = AppSettings.from_env()
     configure_logging(settings.log_level)
-    orchestrator = build_orchestrator(settings)
+    overlay = build_overlay(settings)
+    orchestrator = build_orchestrator(settings, event_sink=overlay)
     audio_input = build_audio_input(settings)
-    await orchestrator.start()
 
     try:
+        if overlay is not None:
+            await overlay.start()
+            print(f"VocaLive overlay: {overlay.url}")
+        await orchestrator.start()
         if audio_input is None:
             return await _run_stdin_shell(orchestrator)
         return await _run_microphone_loop(orchestrator, audio_input)
@@ -39,9 +45,13 @@ async def run_cli() -> int:
         if audio_input is not None:
             await audio_input.close()
         await orchestrator.stop()
+        if overlay is not None:
+            await overlay.stop()
 
-
-def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
+def build_orchestrator(
+    settings: AppSettings,
+    event_sink: ConversationEventSink | None = None,
+) -> ConversationOrchestrator:
     if _uses_live_audio_input(settings) and settings.stt_provider == "mock":
         raise ValueError(
             "microphone/application audio input requires a real STT adapter; "
@@ -113,6 +123,7 @@ def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
         language_model=language_model,
         tts_engine=tts_engine,
         audio_output=audio_output,
+        event_sink=event_sink,
         screen_capture_engine=screen_capture_engine,
     )
 
@@ -168,6 +179,12 @@ def build_audio_input(settings: AppSettings) -> AudioInput | None:
     if len(live_inputs) == 1:
         return live_inputs[0]
     return CombinedAudioInput(live_inputs)
+
+
+def build_overlay(settings: AppSettings) -> OverlayServer | None:
+    if not settings.overlay.enabled:
+        return None
+    return OverlayServer(settings.overlay)
 
 
 async def _run_stdin_shell(orchestrator: ConversationOrchestrator) -> int:

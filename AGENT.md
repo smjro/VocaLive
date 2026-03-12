@@ -12,6 +12,7 @@ Current runtime modes:
 
 - `stdin` shell for local development and provider wiring checks
 - `microphone` capture via `sounddevice` with local utterance detection
+- optional local browser overlay for transparent on-screen character captions
 - optional macOS application-audio capture layered onto `stdin` or `microphone`
 
 Current default assembly:
@@ -20,6 +21,7 @@ Current default assembly:
 - LLM: `EchoLanguageModel`
 - TTS: `MockTextToSpeechEngine`
 - Output: `MemoryAudioOutput`
+- Overlay: disabled by default
 
 Current optional real adapters:
 
@@ -28,12 +30,19 @@ Current optional real adapters:
 - TTS: `AivisSpeechTextToSpeechEngine`
 - Output: `SpeakerAudioOutput`
 
+Current optional presentation path:
+
+- UI events: `src/vocalive/pipeline/events.py`
+- Overlay server: `src/vocalive/ui/overlay.py`
+- Character asset path: `src/vocalive/ui/assets/character.png`
+
 Current hard constraints in the shipped app assembly:
 
 - live microphone or application-audio input requires a real STT adapter, currently `moonshine`
 - application-audio capture currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - speaker playback uses `afplay` by default on macOS unless `VOCALIVE_SPEAKER_COMMAND` is set
+- the overlay is local browser UI only; it is driven by playback-chunk events rather than model token streaming
 
 ## Current behavior that changes must preserve
 
@@ -50,6 +59,9 @@ The repository is not a blank prototype. These behaviors already exist and shoul
 9. Assistant messages are committed only after playback completes.
 10. Interrupted assistant replies do not become committed history.
 11. Structured logs and per-stage latency metrics are emitted around the pipeline.
+12. When the overlay is enabled, assistant text is revealed progressively during playback.
+13. Overlay text is shown only while the assistant is actively speaking and clears on completion or interruption.
+14. Overlay presentation stays transparent and keeps the character visible, with captions rendered in front of the lower body rather than over the face.
 
 ## Working priorities
 
@@ -74,10 +86,13 @@ Keep these concerns separated:
 - TTS adapters
 - audio output / playback
 - orchestration and interruption control
+- conversation event emission / presentation sinks
+- browser overlay UI / static asset serving
 - configuration
 - logging and metrics
 
 Do not move provider-specific HTTP or SDK logic into `pipeline/orchestrator.py`.
+Do not move browser-serving or SSE overlay logic into `pipeline/orchestrator.py`.
 
 Prefer extending the existing boundaries in:
 
@@ -86,6 +101,7 @@ Prefer extending the existing boundaries in:
 - `src/vocalive/llm/`
 - `src/vocalive/tts/`
 - `src/vocalive/pipeline/`
+- `src/vocalive/ui/`
 - `src/vocalive/config/settings.py`
 
 ## Configuration rules
@@ -125,6 +141,7 @@ The current pipeline records:
 
 - metrics for `stt`, `llm`, `tts`, `playback`, and `turn_total`
 - structured logs for queue overflow, interruption, cancellation, transcription, response completion, and failures
+- conversation lifecycle events that optional presentation sinks can consume
 
 If you add a new pipeline stage or a new long-lived resource, add:
 
@@ -146,6 +163,9 @@ Current high-value areas already covered by unit tests:
 - Moonshine model resolution and transcript-hint behavior
 - Gemini payload shaping
 - Aivis speaker/style selection
+- orchestrator interruption, playback chunking, and session rules
+- overlay rendering and character asset fallback
+- UI event emission for caption overlays and interruption handling
 - orchestrator interruption, playback chunking, and session rules including application-audio context
 - structured logging serialization
 
@@ -168,6 +188,7 @@ These are not implemented today and should not be described as already available
 - streaming partial STT results
 - streaming token output from the LLM
 - streaming audio output from TTS
+- token-accurate overlay text streaming; the current overlay is synchronized at playback-chunk granularity
 - echo cancellation / full-duplex coordination
 - persistent metrics export
 - separate restartable worker processes

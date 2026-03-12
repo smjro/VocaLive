@@ -27,6 +27,7 @@ The repository currently ships with:
 - Implemented: trigger-based named-window screenshot capture for Gemini input on macOS
 - Implemented: AivisSpeech synthesis over the local HTTP API
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
+- Implemented: optional transparent browser overlay with a character image, speech-only captions, and per-chunk text reveal timed to playback
 - Implemented: bounded LLM request compaction with an earlier-conversation summary plus a recent raw-message window
 - Implemented: microphone-only reply debounce that merges closely spaced live utterances before one LLM turn
 - Implemented: conservative microphone reply suppression for short reactions and cooldown-period chatter while preserving explicit questions/requests
@@ -68,6 +69,7 @@ export VOCALIVE_STT_PROVIDER=moonshine
 export VOCALIVE_MODEL_PROVIDER=gemini
 export VOCALIVE_TTS_PROVIDER=aivis
 export VOCALIVE_OUTPUT_PROVIDER=speaker
+export VOCALIVE_OVERLAY_ENABLED=true
 export VOCALIVE_CONVERSATION_LANGUAGE=ja
 export VOCALIVE_SCREEN_CAPTURE_ENABLED=true
 export VOCALIVE_SCREEN_WINDOW_NAME="Steam"
@@ -77,6 +79,8 @@ export VOCALIVE_GEMINI_API_KEY=...
 PYTHONPATH=src python3 -m vocalive
 ```
 
+When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay is transparent, renders the character on the right, and shows assistant text only while the assistant is actively speaking. Each sentence-sized chunk is revealed progressively to match playback timing, then cleared when playback finishes or is interrupted.
+
 Current runtime constraints:
 
 - live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
@@ -84,6 +88,7 @@ Current runtime constraints:
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` currently requires `VOCALIVE_MODEL_PROVIDER=gemini`, macOS, and Screen Recording permission
 - speaker playback uses `afplay {path}` by default on macOS; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
+- the overlay is local-only and driven by sentence playback events; it is not token streaming from the LLM
 - Gemini accepts either `VOCALIVE_GEMINI_API_KEY` or `GEMINI_API_KEY`
 - Gemini defaults to a surreal, deadpan conversation persona inspired by the vibe of Kamiusagi Rope; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
 
@@ -178,6 +183,12 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local transparent browser overlay with speech-only captions |
+| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Host/interface used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_PORT` | `8765` | Port used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
+| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
@@ -223,6 +234,8 @@ Current provider support:
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command
+- `overlay` is an optional local browser UI fed by orchestrator events and chunk-level playback timing
+- the overlay loads character art from `src/vocalive/ui/assets/character.png` when present, and otherwise falls back to the built-in vector character
 - provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
 
 ## Repository layout
@@ -236,6 +249,7 @@ src/vocalive/
   screen/      optional named-window screen capture adapters
   stt/         speech-to-text interface and adapters
   tts/         text-to-speech interface and adapters
+  ui/          local browser overlay server, transparent character UI, and overlay assets
   util/        logging, metrics, and time helpers
   main.py      CLI entry point and adapter assembly
 

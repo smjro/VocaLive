@@ -118,6 +118,16 @@ class OutputSettings:
 
 
 @dataclass
+class OverlaySettings:
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auto_open: bool = True
+    title: str = "VocaLive Overlay"
+    character_name: str = "Tora"
+
+
+@dataclass
 class ReplySettings:
     debounce_ms: float = 1000.0
     policy_enabled: bool = True
@@ -185,6 +195,7 @@ class AppSettings:
     input: InputSettings = field(default_factory=InputSettings)
     application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
+    overlay: OverlaySettings = field(default_factory=OverlaySettings)
     reply: ReplySettings = field(default_factory=ReplySettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
@@ -289,6 +300,14 @@ class AppSettings:
                     os.getenv("VOCALIVE_OUTPUT_PROVIDER", OutputProvider.MEMORY.value)
                 ),
                 speaker_command=os.getenv("VOCALIVE_SPEAKER_COMMAND"),
+            ),
+            overlay=OverlaySettings(
+                enabled=_read_bool("VOCALIVE_OVERLAY_ENABLED", default=False),
+                host=os.getenv("VOCALIVE_OVERLAY_HOST", "127.0.0.1"),
+                port=_read_int("VOCALIVE_OVERLAY_PORT", default=8765),
+                auto_open=_read_bool("VOCALIVE_OVERLAY_AUTO_OPEN", default=True),
+                title=os.getenv("VOCALIVE_OVERLAY_TITLE", "VocaLive Overlay"),
+                character_name=os.getenv("VOCALIVE_OVERLAY_CHARACTER_NAME", "Tora"),
             ),
             reply=ReplySettings(
                 debounce_ms=_read_float("VOCALIVE_REPLY_DEBOUNCE_MS", default=1000.0),
