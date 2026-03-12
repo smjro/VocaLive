@@ -210,12 +210,18 @@ class AppSettingsTests(unittest.TestCase):
             os.environ,
             {
                 "VOCALIVE_REPLY_DEBOUNCE_MS": "250",
+                "VOCALIVE_REPLY_POLICY_ENABLED": "false",
+                "VOCALIVE_REPLY_MIN_GAP_MS": "4200",
+                "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS": "9",
             },
             clear=True,
         ):
             settings = AppSettings.from_env()
 
         self.assertEqual(settings.reply.debounce_ms, 250.0)
+        self.assertFalse(settings.reply.policy_enabled)
+        self.assertEqual(settings.reply.min_gap_ms, 4200.0)
+        self.assertEqual(settings.reply.short_utterance_max_chars, 9)
 
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -228,6 +234,9 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.context.recent_message_count, 8)
         self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
         self.assertEqual(settings.reply.debounce_ms, 1000.0)
+        self.assertTrue(settings.reply.policy_enabled)
+        self.assertEqual(settings.reply.min_gap_ms, 6000.0)
+        self.assertEqual(settings.reply.short_utterance_max_chars, 12)
         self.assertFalse(settings.application_audio.enabled)
         self.assertEqual(
             settings.application_audio.mode,

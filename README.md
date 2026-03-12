@@ -29,6 +29,7 @@ The repository currently ships with:
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
 - Implemented: bounded LLM request compaction with an earlier-conversation summary plus a recent raw-message window
 - Implemented: microphone-only reply debounce that merges closely spaced live utterances before one LLM turn
+- Implemented: conservative microphone reply suppression for short reactions and cooldown-period chatter while preserving explicit questions/requests
 - Implemented: structured JSON logging and in-memory stage latency metrics
 - Implemented: unit tests for settings, device resolution, utterance accumulation, provider payload/selection logic, queue behavior, and orchestration
 - Not implemented yet: streaming partial STT / LLM / TTS
@@ -92,6 +93,7 @@ Microphone tuning notes:
 - if phrase starts are clipped, increase `VOCALIVE_MIC_PRE_SPEECH_MS`
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
 - after one live utterance is emitted, VocaLive waits briefly before queueing the LLM turn so closely spaced microphone utterances can merge; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
+- microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
 - in microphone mode, local speech onset interrupts stale assistant playback before the next utterance is fully emitted
 
 Application-audio notes:
@@ -178,6 +180,9 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
+| `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
+| `VOCALIVE_REPLY_MIN_GAP_MS` | `6000` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
+| `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30` | Gemini HTTP timeout |

@@ -120,6 +120,9 @@ class OutputSettings:
 @dataclass
 class ReplySettings:
     debounce_ms: float = 1000.0
+    policy_enabled: bool = True
+    min_gap_ms: float = 6000.0
+    short_utterance_max_chars: int = 12
 
 
 @dataclass
@@ -274,6 +277,12 @@ class AppSettings:
             ),
             reply=ReplySettings(
                 debounce_ms=_read_float("VOCALIVE_REPLY_DEBOUNCE_MS", default=1000.0),
+                policy_enabled=_read_bool("VOCALIVE_REPLY_POLICY_ENABLED", default=True),
+                min_gap_ms=_read_float("VOCALIVE_REPLY_MIN_GAP_MS", default=6000.0),
+                short_utterance_max_chars=_read_int(
+                    "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
+                    default=12,
+                ),
             ),
             gemini=GeminiSettings(
                 api_key=os.getenv("VOCALIVE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"),

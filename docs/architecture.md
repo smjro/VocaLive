@@ -51,6 +51,7 @@ shared pipeline
   -> briefly debounce microphone user turns and merge compatible follow-up utterances
   -> STT adapter
   -> append user or application-context message to session
+  -> optionally suppress low-value microphone chatter before screen capture / LLM / TTS
   -> optionally capture the configured window for the current turn when a trigger phrase matches
   -> compact older user/assistant history into one bounded summary while keeping a recent raw-message window
   -> prepend conversation-language system instruction when configured
@@ -174,6 +175,7 @@ Structured logs are emitted for:
 - `turn_interrupted`
 - `turn_cancelled`
 - `turn_failed`
+- `response_suppressed`
 - `screen_capture_ready`
 - `screen_capture_failed`
 - `transcription_ready`

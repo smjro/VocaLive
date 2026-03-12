@@ -387,6 +387,95 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_short_microphone_reaction_is_suppressed_after_recent_reply(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    min_gap_ms=5000.0,
+                    short_utterance_max_chars=12,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("こんにちは"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("やばい"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "こんにちは"),
+                ("assistant", "captured"),
+                ("user", "やばい"),
+            ],
+        )
+
+    async def test_explicit_microphone_question_bypasses_reply_suppression(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    min_gap_ms=5000.0,
+                    short_utterance_max_chars=12,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("こんにちは"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("なんで？"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 2)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "こんにちは"),
+                ("assistant", "captured"),
+                ("user", "なんで？"),
+                ("assistant", "captured"),
+            ],
+        )
+
     async def test_trigger_phrase_adds_screen_capture_parts_to_current_turn(self) -> None:
         language_model = MultimodalCapturingLanguageModel()
         screen_capture_engine = StubScreenCaptureEngine()
