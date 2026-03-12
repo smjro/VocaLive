@@ -142,6 +142,12 @@ class ConversationSettings:
 
 
 @dataclass
+class ContextSettings:
+    recent_message_count: int = 8
+    conversation_summary_max_chars: int = 1200
+
+
+@dataclass
 class MoonshineSettings:
     model_name: str = "base"
 
@@ -164,6 +170,7 @@ class AppSettings:
     tts_provider: str = "mock"
     queue: QueueSettings = field(default_factory=QueueSettings)
     conversation: ConversationSettings = field(default_factory=ConversationSettings)
+    context: ContextSettings = field(default_factory=ContextSettings)
     input: InputSettings = field(default_factory=InputSettings)
     application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
@@ -195,6 +202,16 @@ class AppSettings:
                 language=_read_optional_str_with_default(
                     "VOCALIVE_CONVERSATION_LANGUAGE",
                     default="ja",
+                ),
+            ),
+            context=ContextSettings(
+                recent_message_count=_read_int(
+                    "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
+                    default=8,
+                ),
+                conversation_summary_max_chars=_read_int(
+                    "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
+                    default=1200,
                 ),
             ),
             input=InputSettings(
