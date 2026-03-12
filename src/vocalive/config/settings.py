@@ -118,6 +118,11 @@ class OutputSettings:
 
 
 @dataclass
+class ReplySettings:
+    debounce_ms: float = 1000.0
+
+
+@dataclass
 class GeminiSettings:
     api_key: str | None = None
     model_name: str = "gemini-2.5-flash"
@@ -174,6 +179,7 @@ class AppSettings:
     input: InputSettings = field(default_factory=InputSettings)
     application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
+    reply: ReplySettings = field(default_factory=ReplySettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
@@ -265,6 +271,9 @@ class AppSettings:
                     os.getenv("VOCALIVE_OUTPUT_PROVIDER", OutputProvider.MEMORY.value)
                 ),
                 speaker_command=os.getenv("VOCALIVE_SPEAKER_COMMAND"),
+            ),
+            reply=ReplySettings(
+                debounce_ms=_read_float("VOCALIVE_REPLY_DEBOUNCE_MS", default=1000.0),
             ),
             gemini=GeminiSettings(
                 api_key=os.getenv("VOCALIVE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"),

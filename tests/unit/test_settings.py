@@ -205,6 +205,18 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.context.recent_message_count, 5)
         self.assertEqual(settings.context.conversation_summary_max_chars, 640)
 
+    def test_from_env_reads_reply_debounce_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_REPLY_DEBOUNCE_MS": "250",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.reply.debounce_ms, 250.0)
+
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             settings = AppSettings.from_env()
@@ -215,6 +227,7 @@ class AppSettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.context.recent_message_count, 8)
         self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
+        self.assertEqual(settings.reply.debounce_ms, 1000.0)
         self.assertFalse(settings.application_audio.enabled)
         self.assertEqual(
             settings.application_audio.mode,

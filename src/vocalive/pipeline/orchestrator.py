@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from vocalive.audio.output import AudioOutput
-from vocalive.config.settings import AppSettings, ApplicationAudioMode
+from vocalive.config.settings import AppSettings, ApplicationAudioMode, InputProvider
 from vocalive.llm.base import LanguageModel
 from vocalive.models import (
     AssistantResponse,
@@ -77,6 +77,10 @@ class ConversationOrchestrator:
         self._interruptions = InterruptionController()
         self._idle_event = asyncio.Event()
         self._work_available = asyncio.Event()
+        self._pending_submission_lock = asyncio.Lock()
+        self._pending_live_segment: AudioSegment | None = None
+        self._pending_live_segment_generation = 0
+        self._pending_live_segment_task: asyncio.Task[None] | None = None
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
@@ -89,6 +93,7 @@ class ConversationOrchestrator:
         self._worker_task = asyncio.create_task(self._run(), name="vocalive-orchestrator")
 
     async def stop(self) -> None:
+        await self._discard_pending_live_segment()
         await self._interrupt_active_turn(reason="shutdown", force_stop_audio=True)
         worker_task = self._worker_task
         self._worker_task = None
@@ -103,8 +108,13 @@ class ConversationOrchestrator:
     async def submit_utterance(self, segment: AudioSegment) -> bool:
         if self._should_capture_application_audio_as_context(segment):
             return await self.submit_application_context(segment)
+        if self._should_debounce_live_segment(segment):
+            return await self._submit_debounced_live_segment(segment)
+        return await self._queue_turn_segment(segment, reason="utterance_submitted")
+
+    async def _queue_turn_segment(self, segment: AudioSegment, *, reason: str) -> bool:
         self._idle_event.clear()
-        await self._interrupt_active_turn(reason="utterance_submitted")
+        await self._interrupt_active_turn(reason=reason)
         accepted = await self._queue.put(segment)
         if not accepted:
             self._log_queue_overflow(queue_name="conversation", queue_size=self._queue.qsize())
@@ -112,6 +122,72 @@ class ConversationOrchestrator:
             return False
         self._work_available.set()
         return True
+
+    async def _submit_debounced_live_segment(self, segment: AudioSegment) -> bool:
+        self._idle_event.clear()
+        segment_to_flush: AudioSegment | None = None
+        async with self._pending_submission_lock:
+            pending_segment = self._pending_live_segment
+            if pending_segment is None:
+                self._pending_live_segment = segment
+                self._schedule_pending_live_segment_flush_locked()
+                return True
+            if _segments_can_merge(pending_segment, segment):
+                self._pending_live_segment = _merge_segments(pending_segment, segment)
+                self._schedule_pending_live_segment_flush_locked()
+                return True
+            segment_to_flush = pending_segment
+            self._pending_live_segment = segment
+            self._schedule_pending_live_segment_flush_locked()
+        if segment_to_flush is None:
+            return True
+        return await self._queue_turn_segment(
+            segment_to_flush,
+            reason="debounced_utterance_flushed",
+        )
+
+    def _schedule_pending_live_segment_flush_locked(self) -> None:
+        self._pending_live_segment_generation += 1
+        pending_task = self._pending_live_segment_task
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+        generation = self._pending_live_segment_generation
+        self._pending_live_segment_task = asyncio.create_task(
+            self._flush_pending_live_segment_after_delay(generation),
+            name=f"vocalive-pending-live-segment-{generation}",
+        )
+
+    async def _flush_pending_live_segment_after_delay(self, generation: int) -> None:
+        try:
+            await asyncio.sleep(max(0.0, self.settings.reply.debounce_ms) / 1000.0)
+        except asyncio.CancelledError:
+            return
+        segment_to_flush: AudioSegment | None = None
+        async with self._pending_submission_lock:
+            if generation != self._pending_live_segment_generation:
+                return
+            segment_to_flush = self._pending_live_segment
+            self._pending_live_segment = None
+            self._pending_live_segment_task = None
+        if segment_to_flush is None:
+            self._set_idle_if_drained()
+            return
+        await self._queue_turn_segment(
+            segment_to_flush,
+            reason="debounced_utterance_ready",
+        )
+
+    async def _discard_pending_live_segment(self) -> None:
+        async with self._pending_submission_lock:
+            self._pending_live_segment = None
+            self._pending_live_segment_generation += 1
+            pending_task = self._pending_live_segment_task
+            self._pending_live_segment_task = None
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending_task
+        self._set_idle_if_drained()
 
     async def submit_application_context(self, segment: AudioSegment) -> bool:
         if segment.source != "application_audio":
@@ -274,11 +350,19 @@ class ConversationOrchestrator:
 
     def _set_idle_if_drained(self) -> None:
         if (
-            self._queue.empty()
+            self._pending_live_segment is None
+            and self._queue.empty()
             and self._application_context_queue.empty()
             and not self._interruptions.has_active_turn
         ):
             self._idle_event.set()
+
+    def _should_debounce_live_segment(self, segment: AudioSegment) -> bool:
+        return (
+            self.settings.input.provider is InputProvider.MICROPHONE
+            and segment.source == "user"
+            and self.settings.reply.debounce_ms > 0.0
+        )
 
     async def _play_response(
         self,
@@ -528,3 +612,34 @@ async def _discard_background_task(task: asyncio.Task[_SynthesizedChunk] | None)
         task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
+
+
+def _segments_can_merge(first: AudioSegment, second: AudioSegment) -> bool:
+    return (
+        first.sample_rate_hz == second.sample_rate_hz
+        and first.channels == second.channels
+        and first.sample_width_bytes == second.sample_width_bytes
+        and first.source == second.source
+        and first.source_label == second.source_label
+    )
+
+
+def _merge_segments(first: AudioSegment, second: AudioSegment) -> AudioSegment:
+    if not _segments_can_merge(first, second):
+        raise ValueError("audio segments are not mergeable")
+    return AudioSegment(
+        pcm=first.pcm + second.pcm,
+        sample_rate_hz=first.sample_rate_hz,
+        channels=first.channels,
+        sample_width_bytes=first.sample_width_bytes,
+        transcript_hint=_merge_transcript_hints(first.transcript_hint, second.transcript_hint),
+        source=first.source,
+        source_label=first.source_label,
+    )
+
+
+def _merge_transcript_hints(first: str | None, second: str | None) -> str | None:
+    normalized_parts = [part.strip() for part in (first, second) if part and part.strip()]
+    if not normalized_parts:
+        return None
+    return " ".join(normalized_parts)
