@@ -13,6 +13,7 @@ Current runtime modes:
 - `stdin` shell for local development and provider wiring checks
 - `microphone` capture via `sounddevice` with local utterance detection
 - optional local browser overlay for transparent on-screen character captions
+- optional macOS application-audio capture layered onto `stdin` or `microphone`
 
 Current default assembly:
 
@@ -37,7 +38,8 @@ Current optional presentation path:
 
 Current hard constraints in the shipped app assembly:
 
-- `VOCALIVE_INPUT_PROVIDER=microphone` requires a real STT adapter, currently `moonshine`
+- live microphone or application-audio input requires a real STT adapter, currently `moonshine`
+- application-audio capture currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - speaker playback uses `afplay` by default on macOS unless `VOCALIVE_SPEAKER_COMMAND` is set
 - the overlay is local browser UI only; it is driven by playback-chunk events rather than model token streaming
@@ -49,15 +51,17 @@ The repository is not a blank prototype. These behaviors already exist and shoul
 1. New utterances interrupt the currently active turn.
 2. The ingress queue is bounded and overflow behavior is explicit.
 3. Microphone speech start can interrupt stale playback before end-of-turn emission.
-4. Assistant responses are split into sentence-sized chunks for playback.
-5. TTS for the next sentence is prefetched while the current sentence is playing.
-6. User messages are committed to session history after STT.
-7. Assistant messages are committed only after playback completes.
-8. Interrupted assistant replies do not become committed history.
-9. Structured logs and per-stage latency metrics are emitted around the pipeline.
-10. When the overlay is enabled, assistant text is revealed progressively during playback.
-11. Overlay text is shown only while the assistant is actively speaking and clears on completion or interruption.
-12. Overlay presentation stays transparent and keeps the character visible, with captions rendered in front of the lower body rather than over the face.
+4. Application-audio `context_only` mode commits app transcripts to session without immediately triggering LLM/TTS.
+5. `respond`-mode application audio can still interrupt stale playback like a live turn.
+6. Assistant responses are split into sentence-sized chunks for playback.
+7. TTS for the next sentence is prefetched while the current sentence is playing.
+8. User messages are committed to session history after STT.
+9. Assistant messages are committed only after playback completes.
+10. Interrupted assistant replies do not become committed history.
+11. Structured logs and per-stage latency metrics are emitted around the pipeline.
+12. When the overlay is enabled, assistant text is revealed progressively during playback.
+13. Overlay text is shown only while the assistant is actively speaking and clears on completion or interruption.
+14. Overlay presentation stays transparent and keeps the character visible, with captions rendered in front of the lower body rather than over the face.
 
 ## Working priorities
 
@@ -155,13 +159,14 @@ Current high-value areas already covered by unit tests:
 
 - settings parsing and provider alias normalization
 - queue overflow behavior
-- microphone utterance accumulation and device resolution
+- microphone utterance accumulation, combined live-input fan-in, and device resolution
 - Moonshine model resolution and transcript-hint behavior
 - Gemini payload shaping
 - Aivis speaker/style selection
 - orchestrator interruption, playback chunking, and session rules
 - overlay rendering and character asset fallback
 - UI event emission for caption overlays and interruption handling
+- orchestrator interruption, playback chunking, and session rules including application-audio context
 - structured logging serialization
 
 Add regression coverage when fixing bugs in latency-sensitive or cancellation-sensitive code.

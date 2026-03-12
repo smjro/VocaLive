@@ -40,6 +40,14 @@ DEFAULT_GEMINI_SYSTEM_INSTRUCTION = (
     "Answer the user's actual question first, then if helpful add one dry sideways observation. "
     "Stay coherent and helpful rather than turning nonsense into the main point."
 )
+DEFAULT_SCREEN_TRIGGER_PHRASES = (
+    "画面みて",
+    "画面見て",
+    "画面をみて",
+    "画面を見て",
+    "スクショみて",
+    "スクショ見て",
+)
 
 
 class QueueOverflowStrategy(str, Enum):
@@ -55,6 +63,11 @@ class InputProvider(str, Enum):
 class OutputProvider(str, Enum):
     MEMORY = "memory"
     SPEAKER = "speaker"
+
+
+class ApplicationAudioMode(str, Enum):
+    CONTEXT_ONLY = "context_only"
+    RESPOND = "respond"
 
 
 @dataclass
@@ -80,6 +93,25 @@ class InputSettings:
 
 
 @dataclass
+class ApplicationAudioSettings:
+    enabled: bool = False
+    mode: ApplicationAudioMode = ApplicationAudioMode.CONTEXT_ONLY
+    target: str | None = None
+    sample_rate_hz: int = 16_000
+    channels: int = 1
+    block_duration_ms: float = 40.0
+    speech_threshold: float = 0.02
+    pre_speech_ms: float = 200.0
+    speech_hold_ms: float = 320.0
+    silence_threshold_ms: float = 650.0
+    min_utterance_ms: float = 250.0
+    max_utterance_ms: float = 15_000.0
+    timeout_seconds: float = 10.0
+    adaptive_vad_enabled: bool = True
+    stt_enhancement_enabled: bool = True
+
+
+@dataclass
 class OutputSettings:
     provider: OutputProvider = OutputProvider.MEMORY
     speaker_command: str | None = None
@@ -96,6 +128,14 @@ class OverlaySettings:
 
 
 @dataclass
+class ReplySettings:
+    debounce_ms: float = 1000.0
+    policy_enabled: bool = True
+    min_gap_ms: float = 6000.0
+    short_utterance_max_chars: int = 12
+
+
+@dataclass
 class GeminiSettings:
     api_key: str | None = None
     model_name: str = "gemini-2.5-flash"
@@ -106,8 +146,26 @@ class GeminiSettings:
 
 
 @dataclass
+class ScreenCaptureSettings:
+    enabled: bool = False
+    window_name: str | None = None
+    trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_TRIGGER_PHRASES
+    timeout_seconds: float = 5.0
+    resize_max_edge_px: int | None = 1280
+
+
+@dataclass
 class ConversationSettings:
     language: str | None = "ja"
+
+
+@dataclass
+class ContextSettings:
+    recent_message_count: int = 8
+    conversation_summary_max_chars: int = 1200
+    application_recent_message_count: int = 4
+    application_summary_max_chars: int = 900
+    application_summary_min_message_chars: int = 8
 
 
 @dataclass
@@ -133,10 +191,14 @@ class AppSettings:
     tts_provider: str = "mock"
     queue: QueueSettings = field(default_factory=QueueSettings)
     conversation: ConversationSettings = field(default_factory=ConversationSettings)
+    context: ContextSettings = field(default_factory=ContextSettings)
     input: InputSettings = field(default_factory=InputSettings)
+    application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
+    reply: ReplySettings = field(default_factory=ReplySettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
+    screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
     aivis: AivisSpeechSettings = field(default_factory=AivisSpeechSettings)
 
@@ -165,6 +227,28 @@ class AppSettings:
                     default="ja",
                 ),
             ),
+            context=ContextSettings(
+                recent_message_count=_read_int(
+                    "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
+                    default=8,
+                ),
+                conversation_summary_max_chars=_read_int(
+                    "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
+                    default=1200,
+                ),
+                application_recent_message_count=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
+                    default=4,
+                ),
+                application_summary_max_chars=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",
+                    default=900,
+                ),
+                application_summary_min_message_chars=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS",
+                    default=8,
+                ),
+            ),
             input=InputSettings(
                 provider=InputProvider(os.getenv("VOCALIVE_INPUT_PROVIDER", InputProvider.STDIN.value)),
                 sample_rate_hz=_read_int("VOCALIVE_MIC_SAMPLE_RATE", default=16_000),
@@ -182,6 +266,35 @@ class AppSettings:
                     default=True,
                 ),
             ),
+            application_audio=ApplicationAudioSettings(
+                enabled=_read_bool("VOCALIVE_APP_AUDIO_ENABLED", default=False),
+                mode=_read_application_audio_mode(
+                    "VOCALIVE_APP_AUDIO_MODE",
+                    default=ApplicationAudioMode.CONTEXT_ONLY,
+                ),
+                target=_read_optional_str_with_default(
+                    "VOCALIVE_APP_AUDIO_TARGET",
+                    default=None,
+                ),
+                sample_rate_hz=_read_int("VOCALIVE_APP_AUDIO_SAMPLE_RATE", default=16_000),
+                channels=_read_int("VOCALIVE_APP_AUDIO_CHANNELS", default=1),
+                block_duration_ms=_read_float("VOCALIVE_APP_AUDIO_BLOCK_MS", default=40.0),
+                speech_threshold=_read_float("VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD", default=0.02),
+                pre_speech_ms=_read_float("VOCALIVE_APP_AUDIO_PRE_SPEECH_MS", default=200.0),
+                speech_hold_ms=_read_float("VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS", default=320.0),
+                silence_threshold_ms=_read_float("VOCALIVE_APP_AUDIO_SILENCE_MS", default=650.0),
+                min_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS", default=250.0),
+                max_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS", default=15_000.0),
+                timeout_seconds=_read_float("VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS", default=10.0),
+                adaptive_vad_enabled=_read_bool(
+                    "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
+                    default=True,
+                ),
+                stt_enhancement_enabled=_read_bool(
+                    "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
+                    default=True,
+                ),
+            ),
             output=OutputSettings(
                 provider=OutputProvider(
                     os.getenv("VOCALIVE_OUTPUT_PROVIDER", OutputProvider.MEMORY.value)
@@ -196,6 +309,15 @@ class AppSettings:
                 title=os.getenv("VOCALIVE_OVERLAY_TITLE", "VocaLive Overlay"),
                 character_name=os.getenv("VOCALIVE_OVERLAY_CHARACTER_NAME", "Tora"),
             ),
+            reply=ReplySettings(
+                debounce_ms=_read_float("VOCALIVE_REPLY_DEBOUNCE_MS", default=1000.0),
+                policy_enabled=_read_bool("VOCALIVE_REPLY_POLICY_ENABLED", default=True),
+                min_gap_ms=_read_float("VOCALIVE_REPLY_MIN_GAP_MS", default=6000.0),
+                short_utterance_max_chars=_read_int(
+                    "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
+                    default=12,
+                ),
+            ),
             gemini=GeminiSettings(
                 api_key=os.getenv("VOCALIVE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"),
                 model_name=os.getenv("VOCALIVE_GEMINI_MODEL", "gemini-2.5-flash"),
@@ -208,6 +330,22 @@ class AppSettings:
                 system_instruction=_read_optional_str_with_default(
                     "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
                     default=DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+                ),
+            ),
+            screen_capture=ScreenCaptureSettings(
+                enabled=_read_bool("VOCALIVE_SCREEN_CAPTURE_ENABLED", default=False),
+                window_name=_read_optional_str_with_default(
+                    "VOCALIVE_SCREEN_WINDOW_NAME",
+                    default=None,
+                ),
+                trigger_phrases=_read_str_tuple(
+                    "VOCALIVE_SCREEN_TRIGGER_PHRASES",
+                    default=DEFAULT_SCREEN_TRIGGER_PHRASES,
+                ),
+                timeout_seconds=_read_float("VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS", default=5.0),
+                resize_max_edge_px=_read_optional_int_with_default(
+                    "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
+                    default=1280,
                 ),
             ),
             moonshine=MoonshineSettings(
@@ -295,6 +433,35 @@ def _read_optional_str_with_default(name: str, default: str | None) -> str | Non
     if not normalized_value:
         return None
     return normalized_value
+
+
+def _read_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return tuple(part.strip() for part in raw_value.split(",") if part.strip())
+
+
+def _read_application_audio_mode(
+    name: str,
+    default: ApplicationAudioMode,
+) -> ApplicationAudioMode:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized_value = "_".join(raw_value.strip().lower().replace("-", " ").split())
+    aliases = {
+        "context_only": ApplicationAudioMode.CONTEXT_ONLY,
+        "respond": ApplicationAudioMode.RESPOND,
+    }
+    mode = aliases.get(normalized_value)
+    if mode is None:
+        supported_values = ", ".join(mode.value for mode in ApplicationAudioMode)
+        raise ValueError(
+            f"Unsupported application audio mode: {raw_value!r}. "
+            f"Supported values: {supported_values}"
+        )
+    return mode
 
 
 def _normalize_provider_setting(kind: str, raw_value: str) -> str:

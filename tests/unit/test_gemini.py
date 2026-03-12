@@ -10,7 +10,13 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from vocalive.llm.gemini import _build_generate_content_payload, _extract_response_text
-from vocalive.models import ConversationMessage, ConversationRequest, TurnContext
+from vocalive.models import (
+    ConversationInlineDataPart,
+    ConversationMessage,
+    ConversationRequest,
+    ConversationTextPart,
+    TurnContext,
+)
 
 
 class GeminiPayloadTests(unittest.TestCase):
@@ -80,3 +86,68 @@ class GeminiPayloadTests(unittest.TestCase):
         }
 
         self.assertEqual(_extract_response_text(response_body), "hello world")
+
+    def test_payload_appends_current_user_text_and_image_parts(self) -> None:
+        request = ConversationRequest(
+            context=TurnContext(session_id="session", turn_id=1),
+            messages=(ConversationMessage(role="user", content="画面見て"),),
+            current_user_parts=(
+                ConversationTextPart(text="The attached image is the current full-screen screenshot."),
+                ConversationInlineDataPart(mime_type="image/png", data=b"\x89PNG"),
+            ),
+        )
+
+        payload = _build_generate_content_payload(
+            request=request,
+            model_name="gemini-2.5-flash",
+        )
+
+        self.assertEqual(
+            payload["contents"],
+            [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "画面見て"},
+                        {"text": "The attached image is the current full-screen screenshot."},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/png",
+                                "data": "iVBORw==",
+                            }
+                        },
+                    ],
+                }
+            ],
+        )
+
+    def test_payload_keeps_application_messages_separate_from_user_messages(self) -> None:
+        request = ConversationRequest(
+            context=TurnContext(session_id="session", turn_id=1),
+            messages=(
+                ConversationMessage(
+                    role="application",
+                    content="Application audio (Steam): enemy spotted",
+                ),
+                ConversationMessage(role="user", content="何て言ってた?"),
+            ),
+        )
+
+        payload = _build_generate_content_payload(
+            request=request,
+            model_name="gemini-2.5-flash",
+        )
+
+        self.assertEqual(
+            payload["contents"],
+            [
+                {
+                    "role": "user",
+                    "parts": [{"text": "Application audio (Steam): enemy spotted"}],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"text": "何て言ってた?"}],
+                },
+            ],
+        )

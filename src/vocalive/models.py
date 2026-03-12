@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Union
 
 from .util.time import utc_timestamp
 
 
-MessageRole = Literal["system", "user", "assistant"]
+MessageRole = Literal["system", "user", "assistant", "application"]
+AudioSource = Literal["user", "application_audio"]
 
 
 @dataclass(frozen=True)
@@ -22,14 +23,24 @@ class AudioSegment:
     channels: int = 1
     sample_width_bytes: int = 2
     transcript_hint: str | None = None
+    source: AudioSource = "user"
+    source_label: str | None = None
 
     @classmethod
-    def from_text(cls, text: str, sample_rate_hz: int = 16_000) -> "AudioSegment":
+    def from_text(
+        cls,
+        text: str,
+        sample_rate_hz: int = 16_000,
+        source: AudioSource = "user",
+        source_label: str | None = None,
+    ) -> "AudioSegment":
         encoded_text = text.encode("utf-8")
         return cls(
             pcm=encoded_text,
             sample_rate_hz=sample_rate_hz,
             transcript_hint=text,
+            source=source,
+            source_label=source_label,
         )
 
 
@@ -49,9 +60,24 @@ class ConversationMessage:
 
 
 @dataclass(frozen=True)
+class ConversationTextPart:
+    text: str
+
+
+@dataclass(frozen=True)
+class ConversationInlineDataPart:
+    mime_type: str
+    data: bytes
+
+
+ConversationRequestPart = Union[ConversationTextPart, ConversationInlineDataPart]
+
+
+@dataclass(frozen=True)
 class ConversationRequest:
     context: TurnContext
     messages: tuple[ConversationMessage, ...]
+    current_user_parts: tuple[ConversationRequestPart, ...] = ()
 
 
 @dataclass(frozen=True)

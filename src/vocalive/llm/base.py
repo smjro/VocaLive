@@ -8,6 +8,7 @@ from vocalive.pipeline.interruption import CancellationToken
 
 class LanguageModel(ABC):
     name: str
+    supports_multimodal_input: bool = False
 
     @abstractmethod
     async def generate(
