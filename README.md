@@ -19,7 +19,8 @@ The repository currently ships with:
 - Implemented: microphone speech-start barge-in before turn-end emission
 - Implemented: stdin shell and microphone capture with preroll / hold / silence-based utterance detection
 - Implemented: automatic preference for headset-like external microphones when the system default input is built-in
-- Implemented: optional macOS application-audio capture that feeds STT and stores transcripts as application context instead of user speech
+- Implemented: optional macOS application-audio capture that feeds STT and stores transcripts as application context instead of user speech, with `context_only` as the default mode
+- Implemented: adaptive VAD and low-frequency-preserving STT-side speech enhancement for application audio
 - Implemented: mock STT, echo LLM, mock TTS, and in-memory playback for local development
 - Implemented: Moonshine STT via `moonshine-voice`
 - Implemented: Gemini `generateContent` integration over HTTPS
@@ -93,9 +94,14 @@ Microphone tuning notes:
 Application-audio notes:
 
 - application audio can be enabled alongside either `stdin` or `microphone` input
+- `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; app audio is transcribed and appended to session history as labeled application context, but it does not immediately trigger LLM/TTS or interrupt active playback
+- set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application-audio utterances to behave like live turns and trigger immediate assistant replies
 - the configured target is matched against the running macOS application name first and bundle identifier second
+- application audio uses adaptive energy-based VAD by default so steady BGM is more likely to stay in the background; set `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false` to fall back to fixed thresholding
 - application-audio utterances go through STT like live user audio, but session history stores them as labeled application context such as `Application audio (Steam): ...`
-- application-audio speech start also interrupts stale assistant playback before the buffered utterance is fully emitted
+- default application-audio tuning keeps more preroll and trailing context so phrase starts and endings are less likely to clip; raise `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS`, `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS`, or `VOCALIVE_APP_AUDIO_SILENCE_MS` further if one app still cuts too aggressively
+- Moonshine applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization to application audio before STT by default; set `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false` to disable it
+- in `respond` mode, application-audio speech start also interrupts stale assistant playback before the buffered utterance is fully emitted
 - app lookup and capture rely on a small ScreenCaptureKit helper that is built on first use
 - if macOS Screen Recording permission is missing, app lookup or capture will time out/fail and the error is logged
 
@@ -146,17 +152,20 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250` | Minimum buffered audio before end-of-turn detection may emit |
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered utterance |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables macOS application-audio capture as an additional live input |
+| `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
 | `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; matches running application name first, then bundle identifier |
 | `VOCALIVE_APP_AUDIO_SAMPLE_RATE` | `16000` | Application-audio capture sample rate after helper-side conversion |
 | `VOCALIVE_APP_AUDIO_CHANNELS` | `1` | Captured application-audio channel count |
 | `VOCALIVE_APP_AUDIO_BLOCK_MS` | `40` | Duration of each buffered application-audio PCM block |
-| `VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating an application-audio block as speech |
-| `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS` | `120` | Buffered application audio kept before speech onset |
-| `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS` | `180` | Keeps application audio in the speech state briefly after the threshold drops |
-| `VOCALIVE_APP_AUDIO_SILENCE_MS` | `450` | Silence required before emitting a buffered application-audio utterance |
+| `VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD` | `0.02` | Minimum floor for application-audio speech detection; adaptive VAD treats it as a fallback absolute threshold |
+| `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS` | `200` | Buffered application audio kept before speech onset |
+| `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS` | `320` | Keeps application audio in the speech state briefly after the threshold drops |
+| `VOCALIVE_APP_AUDIO_SILENCE_MS` | `650` | Silence required before emitting a buffered application-audio utterance |
 | `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250` | Minimum buffered application audio before end-of-turn detection may emit |
 | `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered application-audio utterance |
 | `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10` | Timeout for macOS app lookup, helper startup, and helper build floor |
+| `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
+| `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine` and aliases such as `moonshine voice` |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
@@ -188,10 +197,10 @@ Current provider support:
 - `mock` STT returns `transcript_hint` or decodes UTF-8 PCM bytes for local tests
 - `mock` model uses `EchoLanguageModel` and replies with `Assistant: <latest user message>`
 - `mock` TTS returns synthetic audio bytes for exercising the pipeline without a real engine
-- `moonshine` uses the optional `moonshine-voice` package for STT
+- `moonshine` uses the optional `moonshine-voice` package for STT and applies low-frequency-preserving enhancement to application audio before transcription by default
 - `VOCALIVE_MOONSHINE_MODEL=base` resolves a language-specific Moonshine model from `VOCALIVE_CONVERSATION_LANGUAGE`, so the default Japanese configuration resolves to `base-ja`
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
-- optional application-audio capture resolves one running macOS app, segments its audio into utterances, and submits those transcripts as labeled application context
+- optional application-audio capture resolves one running macOS app, segments its audio into utterances, and by default submits those transcripts as labeled application context without immediate assistant replies
 - optional screen capture resolves a named on-screen window on macOS and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command

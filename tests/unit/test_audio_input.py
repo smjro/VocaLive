@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.audio.devices import resolve_input_device
 from vocalive.audio.input import CombinedAudioInput, UtteranceAccumulator
+from vocalive.audio.speech_detection import AdaptiveEnergySpeechDetector
 from vocalive.models import AudioSegment
 from vocalive.audio.vad import FixedSilenceTurnDetector
 
@@ -19,6 +21,21 @@ from vocalive.audio.vad import FixedSilenceTurnDetector
 def _pcm_chunk(frame_count: int, amplitude: int) -> bytes:
     frame = int(amplitude).to_bytes(2, byteorder="little", signed=True)
     return frame * frame_count
+
+
+def _mixed_sine_chunk(
+    frame_count: int,
+    components: tuple[tuple[int, float], ...],
+    sample_rate_hz: int = 16_000,
+) -> bytes:
+    samples = bytearray()
+    for index in range(frame_count):
+        sample = 0.0
+        for amplitude, frequency_hz in components:
+            sample += amplitude * math.sin((2.0 * math.pi * frequency_hz * index) / sample_rate_hz)
+        clamped_sample = max(-32768, min(32767, int(round(sample))))
+        samples.extend(clamped_sample.to_bytes(2, byteorder="little", signed=True))
+    return bytes(samples)
 
 
 class _FakeSounddevice:
@@ -153,6 +170,53 @@ class UtteranceAccumulatorTests(unittest.TestCase):
         assert segment is not None
         self.assertEqual(segment.sample_rate_hz, 16_000)
         self.assertGreater(len(segment.pcm), 0)
+
+    def test_adaptive_speech_detector_ignores_steady_background_until_dialogue_arrives(self) -> None:
+        accumulator = UtteranceAccumulator(
+            sample_rate_hz=16_000,
+            speech_threshold=0.02,
+            pre_speech_ms=120.0,
+            speech_hold_ms=0.0,
+            min_utterance_ms=40.0,
+            turn_detector=FixedSilenceTurnDetector(silence_threshold_ms=40.0),
+            speech_detector=AdaptiveEnergySpeechDetector(speech_threshold=0.02),
+        )
+
+        background_chunk = _mixed_sine_chunk(
+            frame_count=640,
+            components=((4_800, 90.0),),
+        )
+        dialogue_chunk = _mixed_sine_chunk(
+            frame_count=640,
+            components=((4_800, 90.0), (7_200, 420.0)),
+        )
+        trailing_silence = _pcm_chunk(frame_count=640, amplitude=0)
+
+        for _ in range(8):
+            self.assertIsNone(accumulator.add_chunk(background_chunk))
+        self.assertIsNone(accumulator.add_chunk(dialogue_chunk))
+
+        segment = accumulator.add_chunk(trailing_silence)
+
+        self.assertIsNotNone(segment)
+        assert segment is not None
+        self.assertGreater(len(segment.pcm), len(dialogue_chunk))
+
+    def test_adaptive_speech_detector_detects_low_male_voice_over_low_background(self) -> None:
+        detector = AdaptiveEnergySpeechDetector(speech_threshold=0.02)
+        background_chunk = _mixed_sine_chunk(
+            frame_count=640,
+            components=((2_600, 60.0), (1_600, 90.0)),
+        )
+        low_voice_chunk = _mixed_sine_chunk(
+            frame_count=640,
+            components=((2_200, 85.0), (1_200, 170.0), (700, 260.0)),
+        )
+
+        for _ in range(8):
+            self.assertFalse(detector.is_speech(background_chunk, sample_width_bytes=2))
+
+        self.assertTrue(detector.is_speech(low_voice_chunk, sample_width_bytes=2))
 
 
 class InputDeviceResolutionTests(unittest.TestCase):

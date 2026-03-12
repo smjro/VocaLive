@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import audioop
 import inspect
 import importlib
 from abc import ABC, abstractmethod
@@ -10,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from vocalive.audio.devices import InputDeviceMatch, resolve_input_device
+from vocalive.audio.speech_detection import FixedThresholdSpeechDetector, SpeechDetector
 from vocalive.audio.vad import FixedSilenceTurnDetector, TurnDetector
 from vocalive.models import AudioSegment
 from vocalive.util.logging import get_logger, log_event
@@ -149,6 +149,7 @@ class UtteranceAccumulator:
         segment_source: str = "user",
         segment_source_label: str | None = None,
         turn_detector: TurnDetector | None = None,
+        speech_detector: SpeechDetector | None = None,
         on_speech_start: Callable[[], None] | None = None,
     ) -> None:
         self.sample_rate_hz = sample_rate_hz
@@ -162,6 +163,9 @@ class UtteranceAccumulator:
         self.segment_source = segment_source
         self.segment_source_label = segment_source_label
         self.turn_detector = turn_detector or FixedSilenceTurnDetector()
+        self.speech_detector = speech_detector or FixedThresholdSpeechDetector(
+            speech_threshold=speech_threshold
+        )
         self.on_speech_start = on_speech_start
         self._buffer = bytearray()
         self._buffered_ms = 0.0
@@ -179,9 +183,10 @@ class UtteranceAccumulator:
             / (self.sample_rate_hz * self.channels * self.sample_width_bytes)
             * 1000.0
         )
-        max_amplitude = float(1 << (8 * self.sample_width_bytes - 1))
-        rms = audioop.rms(chunk, self.sample_width_bytes)
-        measured_speech = (rms / max_amplitude) >= self.speech_threshold
+        measured_speech = self.speech_detector.is_speech(
+            chunk,
+            sample_width_bytes=self.sample_width_bytes,
+        )
 
         if not self._started:
             if measured_speech:

@@ -20,7 +20,7 @@ The current entry point supports two primary input modes plus an optional extra 
 2. `microphone`
    `MicrophoneAudioInput` captures `int16` PCM through `sounddevice`, applies preroll / speech-hold / silence thresholds, and emits utterance-sized `AudioSegment` instances.
 3. `application audio` (optional)
-   `MacOSApplicationAudioInput` captures one running macOS app through a ScreenCaptureKit helper, applies the same local utterance segmentation pattern, and emits utterance-sized `AudioSegment` instances tagged as application audio.
+   `MacOSApplicationAudioInput` captures one running macOS app through a ScreenCaptureKit helper, applies adaptive speech detection by default plus local utterance segmentation, and emits utterance-sized `AudioSegment` instances tagged as application audio. The default `context_only` mode stores those transcripts as session context without immediate assistant replies; `respond` opt-in restores live-turn behavior.
 
 ## Current runtime flow
 
@@ -35,9 +35,15 @@ microphone PCM
   -> ConversationOrchestrator.submit_utterance()
 
 application audio PCM
+  -> SpeechDetector (adaptive by default)
   -> UtteranceAccumulator
   -> AudioSegment(source=application_audio)
-  -> ConversationOrchestrator.submit_utterance()
+  -> if app-audio mode is context_only:
+       low-priority application-context queue
+       -> STT adapter
+       -> append application-context message to session
+     else:
+       ConversationOrchestrator.submit_utterance()
 
 shared pipeline
   -> interrupt current turn
@@ -63,9 +69,10 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `audio/devices.py` | Input device resolution, default-device lookup, and headset/external microphone preference |
 | `audio/input.py` | Stdin-like queue input, microphone capture, combined live-input fan-in, utterance accumulation, and speech-start callbacks |
 | `audio/macos_application.py` | macOS application-audio helper build, app lookup, capture, and utterance emission |
+| `audio/speech_detection.py` | Fixed-threshold and adaptive speech detectors used before utterance segmentation |
 | `audio/output.py` | Playback abstraction, in-memory output, and external speaker command playback |
 | `audio/vad.py` | Turn detection abstraction; current live path uses fixed-silence detection |
-| `stt/` | Speech-to-text interface and adapters |
+| `stt/` | Speech-to-text interface and adapters, including Moonshine application-audio enhancement |
 | `llm/` | Language model interface and adapters |
 | `screen/` | Optional named-window screenshot capture adapters |
 | `tts/` | Text-to-speech interface and adapters |
@@ -91,12 +98,14 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 
 ## Queueing and interruption
 
-The pipeline is built around a bounded ingress queue.
+The pipeline is built around a bounded user-turn queue plus a low-priority application-context queue used by app audio in `context_only` mode.
 
 - queue capacity comes from `QueueSettings.ingress_maxsize`
 - overflow policy is explicit: `drop_oldest` or `reject_new`
 - `submit_utterance()` interrupts the currently active turn before queue insertion
-- in microphone or application-audio mode, speech onset calls `handle_user_speech_start()` so stale playback can stop before the next utterance is fully emitted
+- application audio in `context_only` mode is routed into the low-priority queue and does not interrupt active playback or trigger LLM/TTS
+- microphone speech onset calls `handle_user_speech_start()` so stale playback can stop before the next utterance is fully emitted
+- application-audio speech onset calls `handle_user_speech_start()` only in `respond` mode
 - playback backends receive a `CancellationToken` and must stop quickly when a turn is cancelled
 - `drop_oldest` keeps the newest utterance by discarding the oldest queued item
 - `reject_new` preserves queued work and refuses the new utterance
@@ -109,6 +118,7 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 
 - user messages are appended after STT completes
 - application-audio transcripts are appended after STT completes as labeled `application` context messages, not user messages
+- in the default `context_only` mode, those application messages do not immediately trigger LLM/TTS; they are consumed on the next user-driven turn
 - the LLM receives a snapshot of the current session plus an optional conversation-language system instruction
 - screen captures are request-scoped extras for the current user turn only and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
@@ -147,6 +157,8 @@ Current compatibility constraints:
 - speaker playback depends on an external playback command and defaults to `afplay` on macOS
 
 The stdin shell still works with the real-provider assembly because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
+
+When `segment.source == "application_audio"`, the current Moonshine adapter applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization before transcription. This is intentionally scoped to application audio so the microphone path stays unchanged.
 
 ## Observability
 

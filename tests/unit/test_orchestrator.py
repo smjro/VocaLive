@@ -16,6 +16,8 @@ if str(SRC_ROOT) not in sys.path:
 from vocalive.audio.output import MemoryAudioOutput
 from vocalive.config.settings import (
     AppSettings,
+    ApplicationAudioMode,
+    ApplicationAudioSettings,
     QueueSettings,
     QueueOverflowStrategy,
     ScreenCaptureSettings,
@@ -346,7 +348,7 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screen_capture_engine.calls, [])
         self.assertEqual(language_model.requests[0].current_user_parts, ())
 
-    async def test_application_audio_is_committed_as_application_context(self) -> None:
+    async def test_application_audio_is_committed_as_context_without_immediate_response(self) -> None:
         language_model = CapturingLanguageModel()
         orchestrator = ConversationOrchestrator(
             settings=AppSettings(
@@ -354,6 +356,47 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 queue=QueueSettings(
                     ingress_maxsize=4,
                     overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "ボスが来た",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("application", "Application audio (Steam): ボスが来た"),
+            ],
+        )
+        self.assertEqual(language_model.requests, [])
+
+    async def test_application_audio_can_still_trigger_response_in_respond_mode(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                application_audio=ApplicationAudioSettings(
+                    mode=ApplicationAudioMode.RESPOND,
                 ),
             ),
             stt_engine=MockSpeechToTextEngine(),
@@ -395,7 +438,7 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_application_audio_does_not_trigger_screen_capture(self) -> None:
+    async def test_context_only_application_audio_does_not_trigger_screen_capture(self) -> None:
         language_model = MultimodalCapturingLanguageModel()
         screen_capture_engine = StubScreenCaptureEngine()
         orchestrator = ConversationOrchestrator(
@@ -432,7 +475,36 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             await orchestrator.stop()
 
         self.assertEqual(screen_capture_engine.calls, [])
-        self.assertEqual(language_model.requests[0].current_user_parts, ())
+        self.assertEqual(language_model.requests, [])
+
+    async def test_context_only_application_audio_does_not_interrupt_active_playback(self) -> None:
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        self.orchestrator.audio_output = output
+        self.orchestrator.tts_engine = MockTextToSpeechEngine(delay_seconds=0.0)
+
+        await self.orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        accepted = await self.orchestrator.submit_utterance(
+            AudioSegment.from_text(
+                "cutscene line",
+                source="application_audio",
+                source_label="Steam",
+            )
+        )
+        self.assertTrue(accepted)
+        await self.orchestrator.wait_for_idle()
+
+        self.assertEqual(output.stop_calls, 0)
+        self.assertIn("Assistant: first", output.completed_texts)
+        self.assertEqual(
+            [(message.role, message.content) for message in self.orchestrator.session.snapshot()],
+            [
+                ("user", "first"),
+                ("assistant", "Assistant: first"),
+                ("application", "Application audio (Steam): cutscene line"),
+            ],
+        )
 
     async def test_screen_capture_cancellation_propagates_without_failure_log(self) -> None:
         stream = io.StringIO()

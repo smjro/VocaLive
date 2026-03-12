@@ -6,7 +6,12 @@ import sys
 from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudioInput
 from vocalive.audio.macos_application import MacOSApplicationAudioInput
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
-from vocalive.config.settings import AppSettings, InputProvider, OutputProvider
+from vocalive.config.settings import (
+    AppSettings,
+    ApplicationAudioMode,
+    InputProvider,
+    OutputProvider,
+)
 from vocalive.llm.echo import EchoLanguageModel
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
@@ -46,6 +51,9 @@ def build_orchestrator(settings: AppSettings) -> ConversationOrchestrator:
         stt_engine = MoonshineSpeechToTextEngine(
             model_name=settings.moonshine.model_name,
             default_language=settings.conversation.language,
+            application_audio_enhancement_enabled=(
+                settings.application_audio.stt_enhancement_enabled
+            ),
         )
     else:
         stt_engine = MockSpeechToTextEngine()
@@ -149,6 +157,10 @@ def build_audio_input(settings: AppSettings) -> AudioInput | None:
                 min_utterance_ms=settings.application_audio.min_utterance_ms,
                 max_utterance_ms=settings.application_audio.max_utterance_ms,
                 timeout_seconds=settings.application_audio.timeout_seconds,
+                adaptive_vad_enabled=settings.application_audio.adaptive_vad_enabled,
+                speech_start_events_enabled=(
+                    settings.application_audio.mode is ApplicationAudioMode.RESPOND
+                ),
             )
         )
     if not live_inputs:

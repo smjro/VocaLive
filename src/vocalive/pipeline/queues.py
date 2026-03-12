@@ -31,6 +31,11 @@ class BoundedAsyncQueue(Generic[T]):
     async def get(self) -> T:
         return await self._queue.get()
 
+    def get_nowait(self) -> T | None:
+        if self._queue.empty():
+            return None
+        return self._queue.get_nowait()
+
     def task_done(self) -> None:
         self._queue.task_done()
 

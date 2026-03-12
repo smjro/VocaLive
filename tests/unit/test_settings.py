@@ -13,6 +13,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.config.settings import (
     AppSettings,
+    ApplicationAudioMode,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
     DEFAULT_SCREEN_TRIGGER_PHRASES,
 )
@@ -155,6 +156,7 @@ class AppSettingsTests(unittest.TestCase):
             os.environ,
             {
                 "VOCALIVE_APP_AUDIO_ENABLED": "true",
+                "VOCALIVE_APP_AUDIO_MODE": "respond",
                 "VOCALIVE_APP_AUDIO_TARGET": "Steam",
                 "VOCALIVE_APP_AUDIO_SAMPLE_RATE": "22050",
                 "VOCALIVE_APP_AUDIO_CHANNELS": "2",
@@ -166,12 +168,15 @@ class AppSettingsTests(unittest.TestCase):
                 "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS": "320",
                 "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS": "9000",
                 "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS": "12.5",
+                "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD": "false",
+                "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT": "false",
             },
             clear=True,
         ):
             settings = AppSettings.from_env()
 
         self.assertTrue(settings.application_audio.enabled)
+        self.assertEqual(settings.application_audio.mode, ApplicationAudioMode.RESPOND)
         self.assertEqual(settings.application_audio.target, "Steam")
         self.assertEqual(settings.application_audio.sample_rate_hz, 22_050)
         self.assertEqual(settings.application_audio.channels, 2)
@@ -183,6 +188,8 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.application_audio.min_utterance_ms, 320.0)
         self.assertEqual(settings.application_audio.max_utterance_ms, 9000.0)
         self.assertEqual(settings.application_audio.timeout_seconds, 12.5)
+        self.assertFalse(settings.application_audio.adaptive_vad_enabled)
+        self.assertFalse(settings.application_audio.stt_enhancement_enabled)
 
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -193,4 +200,22 @@ class AppSettingsTests(unittest.TestCase):
             DEFAULT_SCREEN_TRIGGER_PHRASES,
         )
         self.assertFalse(settings.application_audio.enabled)
+        self.assertEqual(
+            settings.application_audio.mode,
+            ApplicationAudioMode.CONTEXT_ONLY,
+        )
         self.assertIsNone(settings.application_audio.target)
+        self.assertEqual(settings.application_audio.pre_speech_ms, 200.0)
+        self.assertEqual(settings.application_audio.speech_hold_ms, 320.0)
+        self.assertEqual(settings.application_audio.silence_threshold_ms, 650.0)
+        self.assertTrue(settings.application_audio.adaptive_vad_enabled)
+        self.assertTrue(settings.application_audio.stt_enhancement_enabled)
+
+    def test_from_env_rejects_unknown_application_audio_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_APP_AUDIO_MODE": "unsupported"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported application audio mode"):
+                AppSettings.from_env()

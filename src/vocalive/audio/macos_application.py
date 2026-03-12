@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vocalive.audio.input import AudioInput, UtteranceAccumulator
+from vocalive.audio.speech_detection import AdaptiveEnergySpeechDetector
 from vocalive.audio.vad import FixedSilenceTurnDetector
 from vocalive.models import AudioSegment
 from vocalive.util.logging import get_logger, log_event
@@ -306,12 +307,14 @@ class MacOSApplicationAudioInput(AudioInput):
         sample_width_bytes: int = 2,
         block_duration_ms: float = 40.0,
         speech_threshold: float = 0.02,
-        pre_speech_ms: float = 120.0,
-        speech_hold_ms: float = 180.0,
-        silence_threshold_ms: float = 450.0,
+        pre_speech_ms: float = 200.0,
+        speech_hold_ms: float = 320.0,
+        silence_threshold_ms: float = 650.0,
         min_utterance_ms: float = 250.0,
         max_utterance_ms: float = 15_000.0,
         timeout_seconds: float = 10.0,
+        adaptive_vad_enabled: bool = True,
+        speech_start_events_enabled: bool = True,
     ) -> None:
         self.target = target
         self.sample_rate_hz = sample_rate_hz
@@ -323,6 +326,8 @@ class MacOSApplicationAudioInput(AudioInput):
             self.frames_per_block * self.channels * self.sample_width_bytes
         )
         self.timeout_seconds = timeout_seconds
+        self.adaptive_vad_enabled = adaptive_vad_enabled
+        self.speech_start_events_enabled = speech_start_events_enabled
         self._on_speech_start: Callable[[], Awaitable[None] | None] | None = None
         self._background_tasks: set[asyncio.Future[object]] = set()
         self._accumulator = UtteranceAccumulator(
@@ -337,6 +342,11 @@ class MacOSApplicationAudioInput(AudioInput):
             segment_source="application_audio",
             segment_source_label=None,
             turn_detector=FixedSilenceTurnDetector(silence_threshold_ms=silence_threshold_ms),
+            speech_detector=(
+                AdaptiveEnergySpeechDetector(speech_threshold=speech_threshold)
+                if adaptive_vad_enabled
+                else None
+            ),
             on_speech_start=self._emit_speech_start,
         )
         self._selected_application: _MacOSApplicationInfo | None = None
@@ -355,6 +365,9 @@ class MacOSApplicationAudioInput(AudioInput):
         self,
         handler: Callable[[], Awaitable[None] | None] | None,
     ) -> None:
+        if not self.speech_start_events_enabled:
+            self._on_speech_start = None
+            return
         self._on_speech_start = handler
 
     @property
@@ -443,6 +456,7 @@ class MacOSApplicationAudioInput(AudioInput):
             sample_rate_hz=self.sample_rate_hz,
             channels=self.channels,
             speech_threshold=self._accumulator.speech_threshold,
+            adaptive_vad=self.adaptive_vad_enabled,
         )
         return process
 
