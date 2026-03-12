@@ -172,13 +172,20 @@ class ConversationOrchestrator:
             turn_id=context.turn_id,
             text=transcription.text,
             stt_provider=transcription.provider,
+            audio_source=segment.source,
+            audio_source_label=segment.source_label,
         )
-        self.session.append_user_message(transcription.text)
-        current_user_parts = await self._maybe_capture_current_user_parts(
-            user_text=transcription.text,
-            context=context,
-            cancellation=cancellation,
-        )
+        session_message_text = _build_session_message_text(segment, transcription.text)
+        if segment.source == "application_audio":
+            self.session.append_application_message(session_message_text)
+            current_user_parts = tuple()
+        else:
+            self.session.append_user_message(session_message_text)
+            current_user_parts = await self._maybe_capture_current_user_parts(
+                user_text=transcription.text,
+                context=context,
+                cancellation=cancellation,
+            )
 
         request = ConversationRequest(
             context=context,
@@ -353,6 +360,14 @@ def _build_conversation_language_instruction(language: str | None) -> str | None
         f"The conversation language is {language_name}. "
         f"Reply in {language_name} unless the user explicitly asks to switch languages."
     )
+
+
+def _build_session_message_text(segment: AudioSegment, transcription_text: str) -> str:
+    normalized_text = transcription_text.strip()
+    if segment.source != "application_audio":
+        return normalized_text
+    source_label = (segment.source_label or "unknown application").strip() or "unknown application"
+    return f"Application audio ({source_label}): {normalized_text}"
 
 
 def _normalize_language(language: str | None) -> str | None:

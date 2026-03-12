@@ -13,6 +13,9 @@ class ConversationSession:
     def append_user_message(self, text: str) -> None:
         self.messages.append(ConversationMessage(role="user", content=text))
 
+    def append_application_message(self, text: str) -> None:
+        self.messages.append(ConversationMessage(role="application", content=text))
+
     def append_assistant_message(self, text: str) -> None:
         self.messages.append(ConversationMessage(role="assistant", content=text))
 

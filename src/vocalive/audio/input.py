@@ -19,6 +19,16 @@ logger = get_logger(__name__)
 
 
 class AudioInput(ABC):
+    async def start(self) -> str | None:
+        """Start any long-lived input resources and return a human-readable label."""
+        return None
+
+    def set_speech_start_handler(
+        self,
+        handler: Callable[[], Awaitable[None] | None] | None,
+    ) -> None:
+        del handler
+
     @abstractmethod
     async def read(self) -> AudioSegment | None:
         """Return the next utterance-sized audio segment."""
@@ -41,6 +51,90 @@ class QueueAudioInput(AudioInput):
         return await self._queue.get()
 
 
+class CombinedAudioInput(AudioInput):
+    def __init__(
+        self,
+        inputs: tuple[AudioInput, ...] | list[AudioInput],
+        maxsize: int = 8,
+    ) -> None:
+        self.inputs = tuple(inputs)
+        if not self.inputs:
+            raise ValueError("CombinedAudioInput requires at least one input")
+        self._queue: asyncio.Queue[AudioSegment | None] = asyncio.Queue(maxsize=maxsize)
+        self._forward_tasks: set[asyncio.Task[None]] = set()
+        self._active_forwarders = 0
+        self._closed = False
+        self._error: Exception | None = None
+
+    async def start(self) -> str | None:
+        labels: list[str] = []
+        for audio_input in self.inputs:
+            label = await audio_input.start()
+            if label:
+                labels.append(label)
+        self._ensure_forward_tasks()
+        if not labels:
+            return None
+        return ", ".join(labels)
+
+    def set_speech_start_handler(
+        self,
+        handler: Callable[[], Awaitable[None] | None] | None,
+    ) -> None:
+        for audio_input in self.inputs:
+            audio_input.set_speech_start_handler(handler)
+
+    async def read(self) -> AudioSegment | None:
+        self._ensure_forward_tasks()
+        segment = await self._queue.get()
+        if segment is None and self._error is not None:
+            raise self._error
+        return segment
+
+    async def close(self) -> None:
+        self._closed = True
+        await asyncio.gather(
+            *(audio_input.close() for audio_input in self.inputs),
+            return_exceptions=True,
+        )
+        if self._forward_tasks:
+            await asyncio.gather(*tuple(self._forward_tasks), return_exceptions=True)
+        if self._queue.empty():
+            await self._queue.put(None)
+
+    def _ensure_forward_tasks(self) -> None:
+        if self._forward_tasks:
+            return
+        self._active_forwarders = len(self.inputs)
+        for index, audio_input in enumerate(self.inputs):
+            task = asyncio.create_task(
+                self._forward_segments(audio_input),
+                name=f"vocalive-audio-input-{index}",
+            )
+            self._forward_tasks.add(task)
+            task.add_done_callback(self._forward_tasks.discard)
+
+    async def _forward_segments(self, audio_input: AudioInput) -> None:
+        try:
+            while not self._closed:
+                segment = await audio_input.read()
+                if segment is None:
+                    return
+                await self._queue.put(segment)
+        except Exception as exc:
+            if self._error is None:
+                self._error = exc
+            self._closed = True
+            await asyncio.gather(
+                *(input_candidate.close() for input_candidate in self.inputs),
+                return_exceptions=True,
+            )
+        finally:
+            self._active_forwarders -= 1
+            if self._active_forwarders == 0:
+                await self._queue.put(None)
+
+
 class UtteranceAccumulator:
     def __init__(
         self,
@@ -52,6 +146,8 @@ class UtteranceAccumulator:
         speech_hold_ms: float = 200.0,
         min_utterance_ms: float = 250.0,
         max_utterance_ms: float = 15_000.0,
+        segment_source: str = "user",
+        segment_source_label: str | None = None,
         turn_detector: TurnDetector | None = None,
         on_speech_start: Callable[[], None] | None = None,
     ) -> None:
@@ -63,6 +159,8 @@ class UtteranceAccumulator:
         self.speech_hold_ms = max(0.0, speech_hold_ms)
         self.min_utterance_ms = min_utterance_ms
         self.max_utterance_ms = max_utterance_ms
+        self.segment_source = segment_source
+        self.segment_source_label = segment_source_label
         self.turn_detector = turn_detector or FixedSilenceTurnDetector()
         self.on_speech_start = on_speech_start
         self._buffer = bytearray()
@@ -130,6 +228,8 @@ class UtteranceAccumulator:
             sample_rate_hz=self.sample_rate_hz,
             channels=self.channels,
             sample_width_bytes=self.sample_width_bytes,
+            source=self.segment_source,
+            source_label=self.segment_source_label,
         )
         self._buffer.clear()
         self._buffered_ms = 0.0

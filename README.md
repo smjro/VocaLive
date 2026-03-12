@@ -6,6 +6,7 @@ The repository currently ships with:
 
 - a stdin shell for local development
 - optional live microphone capture via `sounddevice`
+- optional macOS application-audio capture for one named running app
 - mock providers for end-to-end local testing
 - Moonshine STT, Gemini LLM, and AivisSpeech TTS adapters
 - in-memory output for tests and speaker playback through an external command
@@ -18,6 +19,7 @@ The repository currently ships with:
 - Implemented: microphone speech-start barge-in before turn-end emission
 - Implemented: stdin shell and microphone capture with preroll / hold / silence-based utterance detection
 - Implemented: automatic preference for headset-like external microphones when the system default input is built-in
+- Implemented: optional macOS application-audio capture that feeds STT and stores transcripts as application context instead of user speech
 - Implemented: mock STT, echo LLM, mock TTS, and in-memory playback for local development
 - Implemented: Moonshine STT via `moonshine-voice`
 - Implemented: Gemini `generateContent` integration over HTTPS
@@ -55,6 +57,8 @@ Run the full local voice path against Moonshine, Gemini, AivisSpeech, and speake
 
 ```bash
 export VOCALIVE_INPUT_PROVIDER=microphone
+export VOCALIVE_APP_AUDIO_ENABLED=true
+export VOCALIVE_APP_AUDIO_TARGET="Google Chrome"
 export VOCALIVE_STT_PROVIDER=moonshine
 export VOCALIVE_MODEL_PROVIDER=gemini
 export VOCALIVE_TTS_PROVIDER=aivis
@@ -70,7 +74,8 @@ PYTHONPATH=src python3 -m vocalive
 
 Current runtime constraints:
 
-- `VOCALIVE_INPUT_PROVIDER=microphone` currently requires `VOCALIVE_STT_PROVIDER=moonshine`
+- live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
+- `VOCALIVE_APP_AUDIO_ENABLED=true` currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` currently requires `VOCALIVE_MODEL_PROVIDER=gemini`, macOS, and Screen Recording permission
 - speaker playback uses `afplay {path}` by default on macOS; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
@@ -84,6 +89,15 @@ Microphone tuning notes:
 - if phrase starts are clipped, increase `VOCALIVE_MIC_PRE_SPEECH_MS`
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
 - in microphone mode, local speech onset interrupts stale assistant playback before the next utterance is fully emitted
+
+Application-audio notes:
+
+- application audio can be enabled alongside either `stdin` or `microphone` input
+- the configured target is matched against the running macOS application name first and bundle identifier second
+- application-audio utterances go through STT like live user audio, but session history stores them as labeled application context such as `Application audio (Steam): ...`
+- application-audio speech start also interrupts stale assistant playback before the buffered utterance is fully emitted
+- app lookup and capture rely on a small ScreenCaptureKit helper that is built on first use
+- if macOS Screen Recording permission is missing, app lookup or capture will time out/fail and the error is logged
 
 Screen-capture notes:
 
@@ -131,6 +145,18 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_MIC_SILENCE_MS` | `500` | Silence required before emitting the buffered utterance |
 | `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250` | Minimum buffered audio before end-of-turn detection may emit |
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered utterance |
+| `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables macOS application-audio capture as an additional live input |
+| `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; matches running application name first, then bundle identifier |
+| `VOCALIVE_APP_AUDIO_SAMPLE_RATE` | `16000` | Application-audio capture sample rate after helper-side conversion |
+| `VOCALIVE_APP_AUDIO_CHANNELS` | `1` | Captured application-audio channel count |
+| `VOCALIVE_APP_AUDIO_BLOCK_MS` | `40` | Duration of each buffered application-audio PCM block |
+| `VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating an application-audio block as speech |
+| `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS` | `120` | Buffered application audio kept before speech onset |
+| `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS` | `180` | Keeps application audio in the speech state briefly after the threshold drops |
+| `VOCALIVE_APP_AUDIO_SILENCE_MS` | `450` | Silence required before emitting a buffered application-audio utterance |
+| `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250` | Minimum buffered application audio before end-of-turn detection may emit |
+| `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered application-audio utterance |
+| `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10` | Timeout for macOS app lookup, helper startup, and helper build floor |
 | `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine` and aliases such as `moonshine voice` |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
@@ -165,6 +191,7 @@ Current provider support:
 - `moonshine` uses the optional `moonshine-voice` package for STT
 - `VOCALIVE_MOONSHINE_MODEL=base` resolves a language-specific Moonshine model from `VOCALIVE_CONVERSATION_LANGUAGE`, so the default Japanese configuration resolves to `base-ja`
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
+- optional application-audio capture resolves one running macOS app, segments its audio into utterances, and submits those transcripts as labeled application context
 - optional screen capture resolves a named on-screen window on macOS and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command

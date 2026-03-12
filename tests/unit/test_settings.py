@@ -150,6 +150,40 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.screen_capture.timeout_seconds, 7.5)
         self.assertEqual(settings.screen_capture.resize_max_edge_px, 960)
 
+    def test_from_env_reads_application_audio_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_APP_AUDIO_ENABLED": "true",
+                "VOCALIVE_APP_AUDIO_TARGET": "Steam",
+                "VOCALIVE_APP_AUDIO_SAMPLE_RATE": "22050",
+                "VOCALIVE_APP_AUDIO_CHANNELS": "2",
+                "VOCALIVE_APP_AUDIO_BLOCK_MS": "60",
+                "VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD": "0.015",
+                "VOCALIVE_APP_AUDIO_PRE_SPEECH_MS": "80",
+                "VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS": "240",
+                "VOCALIVE_APP_AUDIO_SILENCE_MS": "650",
+                "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS": "320",
+                "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS": "9000",
+                "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS": "12.5",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertTrue(settings.application_audio.enabled)
+        self.assertEqual(settings.application_audio.target, "Steam")
+        self.assertEqual(settings.application_audio.sample_rate_hz, 22_050)
+        self.assertEqual(settings.application_audio.channels, 2)
+        self.assertEqual(settings.application_audio.block_duration_ms, 60.0)
+        self.assertEqual(settings.application_audio.speech_threshold, 0.015)
+        self.assertEqual(settings.application_audio.pre_speech_ms, 80.0)
+        self.assertEqual(settings.application_audio.speech_hold_ms, 240.0)
+        self.assertEqual(settings.application_audio.silence_threshold_ms, 650.0)
+        self.assertEqual(settings.application_audio.min_utterance_ms, 320.0)
+        self.assertEqual(settings.application_audio.max_utterance_ms, 9000.0)
+        self.assertEqual(settings.application_audio.timeout_seconds, 12.5)
+
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             settings = AppSettings.from_env()
@@ -158,3 +192,5 @@ class AppSettingsTests(unittest.TestCase):
             settings.screen_capture.trigger_phrases,
             DEFAULT_SCREEN_TRIGGER_PHRASES,
         )
+        self.assertFalse(settings.application_audio.enabled)
+        self.assertIsNone(settings.application_audio.target)

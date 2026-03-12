@@ -15,7 +15,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.audio.input import MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput
-from vocalive.config.settings import AppSettings, InputProvider, InputSettings, ScreenCaptureSettings
+from vocalive.config.settings import (
+    AppSettings,
+    ApplicationAudioSettings,
+    InputProvider,
+    InputSettings,
+    ScreenCaptureSettings,
+)
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator
 from vocalive.models import AudioSegment
@@ -59,6 +65,56 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertFalse(audio_input.prefer_external_device)
         self.assertEqual(audio_input._accumulator.pre_speech_ms, 180.0)
         self.assertEqual(audio_input._accumulator.speech_hold_ms, 350.0)
+
+    def test_build_audio_input_combines_microphone_and_application_audio(self) -> None:
+        class _FakeApplicationAudioInput:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+            async def start(self) -> str:
+                return "application audio"
+
+            def set_speech_start_handler(self, handler) -> None:
+                del handler
+
+            async def read(self) -> AudioSegment | None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        with patch("vocalive.main.sys.platform", "darwin"), patch(
+            "vocalive.main.MacOSApplicationAudioInput",
+            _FakeApplicationAudioInput,
+        ):
+            audio_input = build_audio_input(
+                AppSettings(
+                    input=InputSettings(provider=InputProvider.MICROPHONE),
+                    application_audio=ApplicationAudioSettings(
+                        enabled=True,
+                        target="Steam",
+                        timeout_seconds=12.0,
+                    ),
+                )
+            )
+
+        self.assertIsNotNone(audio_input)
+        assert audio_input is not None
+        self.assertEqual(type(audio_input).__name__, "CombinedAudioInput")
+
+    def test_build_orchestrator_rejects_application_audio_with_mock_stt(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "microphone/application audio input requires a real STT adapter",
+        ):
+            build_orchestrator(
+                AppSettings(
+                    application_audio=ApplicationAudioSettings(
+                        enabled=True,
+                        target="Steam",
+                    ),
+                )
+            )
 
     def test_build_orchestrator_enables_screen_capture_for_gemini_on_macos(self) -> None:
         with patch("vocalive.main.sys.platform", "darwin"):

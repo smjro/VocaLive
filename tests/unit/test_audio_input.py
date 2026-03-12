@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -10,7 +11,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from vocalive.audio.devices import resolve_input_device
-from vocalive.audio.input import UtteranceAccumulator
+from vocalive.audio.input import CombinedAudioInput, UtteranceAccumulator
+from vocalive.models import AudioSegment
 from vocalive.audio.vad import FixedSilenceTurnDetector
 
 
@@ -207,3 +209,54 @@ class InputDeviceResolutionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "No external input device was found"):
             resolve_input_device(sounddevice, requested_device="external", prefer_external=True)
+
+
+class _ScriptedAudioInput:
+    def __init__(self, segments: list[AudioSegment | None]) -> None:
+        self._segments = list(segments)
+        self.closed = False
+
+    async def start(self) -> str:
+        return "scripted input"
+
+    def set_speech_start_handler(self, handler) -> None:
+        del handler
+
+    async def read(self) -> AudioSegment | None:
+        await asyncio.sleep(0)
+        return self._segments.pop(0) if self._segments else None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class CombinedAudioInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_combines_segments_from_multiple_inputs(self) -> None:
+        audio_input = CombinedAudioInput(
+            (
+                _ScriptedAudioInput([AudioSegment.from_text("mic"), None]),
+                _ScriptedAudioInput(
+                    [
+                        AudioSegment.from_text(
+                            "npc",
+                            source="application_audio",
+                            source_label="Steam",
+                        ),
+                        None,
+                    ]
+                ),
+            )
+        )
+
+        await audio_input.start()
+        first_segment = await audio_input.read()
+        second_segment = await audio_input.read()
+        terminal_segment = await audio_input.read()
+
+        assert first_segment is not None
+        assert second_segment is not None
+        self.assertEqual(
+            {(first_segment.transcript_hint, first_segment.source), (second_segment.transcript_hint, second_segment.source)},
+            {("mic", "user"), ("npc", "application_audio")},
+        )
+        self.assertEqual(terminal_segment, None)

@@ -120,3 +120,34 @@ class GeminiPayloadTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_payload_keeps_application_messages_separate_from_user_messages(self) -> None:
+        request = ConversationRequest(
+            context=TurnContext(session_id="session", turn_id=1),
+            messages=(
+                ConversationMessage(
+                    role="application",
+                    content="Application audio (Steam): enemy spotted",
+                ),
+                ConversationMessage(role="user", content="何て言ってた?"),
+            ),
+        )
+
+        payload = _build_generate_content_payload(
+            request=request,
+            model_name="gemini-2.5-flash",
+        )
+
+        self.assertEqual(
+            payload["contents"],
+            [
+                {
+                    "role": "user",
+                    "parts": [{"text": "Application audio (Steam): enemy spotted"}],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"text": "何て言ってた?"}],
+                },
+            ],
+        )

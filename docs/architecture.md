@@ -13,12 +13,14 @@ Current design priorities:
 
 ## Runtime modes
 
-The current entry point supports two input modes:
+The current entry point supports two primary input modes plus an optional extra live source:
 
 1. `stdin`
    Typed text is converted to `AudioSegment.from_text()` and submitted through the same orchestrator used by the live path.
 2. `microphone`
    `MicrophoneAudioInput` captures `int16` PCM through `sounddevice`, applies preroll / speech-hold / silence thresholds, and emits utterance-sized `AudioSegment` instances.
+3. `application audio` (optional)
+   `MacOSApplicationAudioInput` captures one running macOS app through a ScreenCaptureKit helper, applies the same local utterance segmentation pattern, and emits utterance-sized `AudioSegment` instances tagged as application audio.
 
 ## Current runtime flow
 
@@ -32,11 +34,16 @@ microphone PCM
   -> AudioSegment
   -> ConversationOrchestrator.submit_utterance()
 
+application audio PCM
+  -> UtteranceAccumulator
+  -> AudioSegment(source=application_audio)
+  -> ConversationOrchestrator.submit_utterance()
+
 shared pipeline
   -> interrupt current turn
   -> bounded ingress queue
   -> STT adapter
-  -> append user message to session
+  -> append user or application-context message to session
   -> optionally capture the configured window for the current turn when a trigger phrase matches
   -> prepend conversation-language system instruction when configured
   -> LLM adapter
@@ -54,7 +61,8 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | Area | Responsibility |
 | --- | --- |
 | `audio/devices.py` | Input device resolution, default-device lookup, and headset/external microphone preference |
-| `audio/input.py` | Stdin-like queue input, microphone capture, utterance accumulation, and speech-start callbacks |
+| `audio/input.py` | Stdin-like queue input, microphone capture, combined live-input fan-in, utterance accumulation, and speech-start callbacks |
+| `audio/macos_application.py` | macOS application-audio helper build, app lookup, capture, and utterance emission |
 | `audio/output.py` | Playback abstraction, in-memory output, and external speaker command playback |
 | `audio/vad.py` | Turn detection abstraction; current live path uses fixed-silence detection |
 | `stt/` | Speech-to-text interface and adapters |
@@ -73,9 +81,9 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 
 `src/vocalive/models.py` defines the provider-agnostic objects shared across modules:
 
-- `AudioSegment`: utterance-sized audio payload plus metadata, including optional `transcript_hint`
+- `AudioSegment`: utterance-sized audio payload plus metadata, including optional `transcript_hint` and source tagging
 - `Transcription`: normalized STT output
-- `ConversationMessage`: stored session history item
+- `ConversationMessage`: stored session history item, including `application` role entries for app-audio context
 - `ConversationRequest`: snapshot of the current conversation plus optional current-turn multimodal parts passed to the LLM
 - `AssistantResponse`: normalized LLM output
 - `SynthesizedSpeech`: TTS output for playback
@@ -88,7 +96,7 @@ The pipeline is built around a bounded ingress queue.
 - queue capacity comes from `QueueSettings.ingress_maxsize`
 - overflow policy is explicit: `drop_oldest` or `reject_new`
 - `submit_utterance()` interrupts the currently active turn before queue insertion
-- in microphone mode, speech onset calls `handle_user_speech_start()` so stale playback can stop before the next utterance is fully emitted
+- in microphone or application-audio mode, speech onset calls `handle_user_speech_start()` so stale playback can stop before the next utterance is fully emitted
 - playback backends receive a `CancellationToken` and must stop quickly when a turn is cancelled
 - `drop_oldest` keeps the newest utterance by discarding the oldest queued item
 - `reject_new` preserves queued work and refuses the new utterance
@@ -100,8 +108,9 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 `ConversationSession` stores the ordered conversation history for one session.
 
 - user messages are appended after STT completes
+- application-audio transcripts are appended after STT completes as labeled `application` context messages, not user messages
 - the LLM receives a snapshot of the current session plus an optional conversation-language system instruction
-- screen captures are request-scoped extras for the current user turn and are not persisted in session history
+- screen captures are request-scoped extras for the current user turn only and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
 - interrupted assistant replies are therefore not committed to session history
 
@@ -128,7 +137,9 @@ Optional real adapters:
 
 Current compatibility constraints:
 
-- microphone input is rejected when STT is still `mock`
+- microphone or application-audio input is rejected when STT is still `mock`
+- application-audio input is rejected unless `VOCALIVE_APP_AUDIO_TARGET` is configured
+- application-audio input currently supports macOS only and depends on Screen Recording permission plus a first-run helper build
 - speaker output is rejected unless TTS is `aivis`
 - screen capture is rejected unless the model provider is `gemini`
 - screen capture is rejected unless `VOCALIVE_SCREEN_WINDOW_NAME` is configured
@@ -143,6 +154,8 @@ Structured logs are emitted for:
 
 - `microphone_stream_started`
 - `microphone_stream_closed`
+- `application_audio_stream_started`
+- `application_audio_stream_closed`
 - `queue_overflow`
 - `turn_interrupted`
 - `turn_cancelled`

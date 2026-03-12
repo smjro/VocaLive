@@ -12,6 +12,7 @@ Current runtime modes:
 
 - `stdin` shell for local development and provider wiring checks
 - `microphone` capture via `sounddevice` with local utterance detection
+- optional macOS application-audio capture layered onto `stdin` or `microphone`
 
 Current default assembly:
 
@@ -29,7 +30,8 @@ Current optional real adapters:
 
 Current hard constraints in the shipped app assembly:
 
-- `VOCALIVE_INPUT_PROVIDER=microphone` requires a real STT adapter, currently `moonshine`
+- live microphone or application-audio input requires a real STT adapter, currently `moonshine`
+- application-audio capture currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - speaker playback uses `afplay` by default on macOS unless `VOCALIVE_SPEAKER_COMMAND` is set
 
@@ -138,11 +140,11 @@ Current high-value areas already covered by unit tests:
 
 - settings parsing and provider alias normalization
 - queue overflow behavior
-- microphone utterance accumulation and device resolution
+- microphone utterance accumulation, combined live-input fan-in, and device resolution
 - Moonshine model resolution and transcript-hint behavior
 - Gemini payload shaping
 - Aivis speaker/style selection
-- orchestrator interruption, playback chunking, and session rules
+- orchestrator interruption, playback chunking, and session rules including application-audio context
 - structured logging serialization
 
 Add regression coverage when fixing bugs in latency-sensitive or cancellation-sensitive code.

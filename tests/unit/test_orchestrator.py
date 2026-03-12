@@ -346,6 +346,94 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screen_capture_engine.calls, [])
         self.assertEqual(language_model.requests[0].current_user_parts, ())
 
+    async def test_application_audio_is_committed_as_application_context(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "ボスが来た",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("application", "Application audio (Steam): ボスが来た"),
+                ("assistant", "captured"),
+            ],
+        )
+        self.assertEqual(
+            [(message.role, message.content) for message in language_model.requests[0].messages[:2]],
+            [
+                (
+                    "system",
+                    "The conversation language is Japanese. "
+                    "Reply in Japanese unless the user explicitly asks to switch languages.",
+                ),
+                ("application", "Application audio (Steam): ボスが来た"),
+            ],
+        )
+
+    async def test_application_audio_does_not_trigger_screen_capture(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    trigger_phrases=("画面見て",),
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "この画面見て",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [])
+        self.assertEqual(language_model.requests[0].current_user_parts, ())
+
     async def test_screen_capture_cancellation_propagates_without_failure_log(self) -> None:
         stream = io.StringIO()
         logger = logging.getLogger("tests.screen_capture_cancelled")
