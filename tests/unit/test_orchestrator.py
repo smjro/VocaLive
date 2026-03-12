@@ -19,8 +19,11 @@ from vocalive.config.settings import (
     ApplicationAudioMode,
     ApplicationAudioSettings,
     ContextSettings,
+    InputProvider,
+    InputSettings,
     QueueSettings,
     QueueOverflowStrategy,
+    ReplySettings,
     ScreenCaptureSettings,
 )
 from vocalive.llm.base import LanguageModel
@@ -314,6 +317,74 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [(message.role, message.content) for message in request_messages[2:]],
             [("user", "bravo")],
+        )
+
+    async def test_microphone_turn_waits_for_reply_debounce_before_llm(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(debounce_ms=40.0),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("hello"))
+            self.assertTrue(accepted)
+            await asyncio.sleep(0.01)
+            self.assertEqual(language_model.requests, [])
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+
+    async def test_microphone_turns_within_reply_debounce_are_merged(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(debounce_ms=40.0),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+            self.assertTrue(accepted)
+            await asyncio.sleep(0.01)
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("second"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "first second"),
+                ("assistant", "captured"),
+            ],
         )
 
     async def test_trigger_phrase_adds_screen_capture_parts_to_current_turn(self) -> None:

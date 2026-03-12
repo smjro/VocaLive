@@ -48,6 +48,7 @@ application audio PCM
 shared pipeline
   -> interrupt current turn
   -> bounded ingress queue
+  -> briefly debounce microphone user turns and merge compatible follow-up utterances
   -> STT adapter
   -> append user or application-context message to session
   -> optionally capture the configured window for the current turn when a trigger phrase matches
