@@ -683,6 +683,70 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screen_capture_engine.calls, [])
         self.assertEqual(language_model.requests, [])
 
+    async def test_older_application_audio_is_compacted_into_separate_summary(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                context=ContextSettings(
+                    recent_message_count=8,
+                    conversation_summary_max_chars=220,
+                    application_recent_message_count=1,
+                    application_summary_max_chars=220,
+                    application_summary_min_message_chars=4,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "boss incoming",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "door opened",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("どうする？"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        request_messages = language_model.requests[0].messages
+        self.assertEqual(request_messages[1].role, "system")
+        self.assertIn("Earlier application audio summary:", request_messages[1].content)
+        self.assertIn("boss incoming", request_messages[1].content)
+        self.assertEqual(
+            [(message.role, message.content) for message in request_messages[2:]],
+            [
+                ("application", "Application audio (Steam): door opened"),
+                ("user", "どうする？"),
+            ],
+        )
+
     async def test_context_only_application_audio_does_not_interrupt_active_playback(self) -> None:
         output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
         self.orchestrator.audio_output = output

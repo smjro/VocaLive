@@ -30,6 +30,7 @@ The repository currently ships with:
 - Implemented: bounded LLM request compaction with an earlier-conversation summary plus a recent raw-message window
 - Implemented: microphone-only reply debounce that merges closely spaced live utterances before one LLM turn
 - Implemented: conservative microphone reply suppression for short reactions and cooldown-period chatter while preserving explicit questions/requests
+- Implemented: separate application-audio summary compaction so older app context does not stay fully verbatim in every LLM request
 - Implemented: structured JSON logging and in-memory stage latency metrics
 - Implemented: unit tests for settings, device resolution, utterance accumulation, provider payload/selection logic, queue behavior, and orchestration
 - Not implemented yet: streaming partial STT / LLM / TTS
@@ -100,6 +101,7 @@ Application-audio notes:
 
 - application audio can be enabled alongside either `stdin` or `microphone` input
 - `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; app audio is transcribed and appended to session history as labeled application context, but it does not immediately trigger LLM/TTS or interrupt active playback
+- older application-audio entries are compacted into a separate bounded summary while the newest configured app-context messages stay verbatim in the LLM request window
 - set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application-audio utterances to behave like live turns and trigger immediate assistant replies
 - the configured target is matched against the running macOS application name first and bundle identifier second
 - application audio uses adaptive energy-based VAD by default so steady BGM is more likely to stay in the background; set `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false` to fall back to fixed thresholding
@@ -179,6 +181,9 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
+| `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept verbatim in Gemini requests before older app context is compacted |
+| `VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS` | `900` | Character budget for the earlier application-audio summary injected ahead of the recent raw app-context window |
+| `VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS` | `8` | Minimum normalized application-audio message length kept in the older app-context summary |
 | `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
 | `VOCALIVE_REPLY_MIN_GAP_MS` | `6000` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
@@ -213,6 +218,7 @@ Current provider support:
 - `VOCALIVE_MOONSHINE_MODEL=base` resolves a language-specific Moonshine model from `VOCALIVE_CONVERSATION_LANGUAGE`, so the default Japanese configuration resolves to `base-ja`
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
 - optional application-audio capture resolves one running macOS app, segments its audio into utterances, and by default submits those transcripts as labeled application context without immediate assistant replies
+- older application-audio context is compacted into one bounded system summary while the newest configured app-audio messages remain verbatim in requests
 - optional screen capture resolves a named on-screen window on macOS and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed

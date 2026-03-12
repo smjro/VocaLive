@@ -197,6 +197,9 @@ class AppSettingsTests(unittest.TestCase):
             {
                 "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT": "5",
                 "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS": "640",
+                "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT": "2",
+                "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS": "420",
+                "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS": "5",
             },
             clear=True,
         ):
@@ -204,6 +207,9 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.context.recent_message_count, 5)
         self.assertEqual(settings.context.conversation_summary_max_chars, 640)
+        self.assertEqual(settings.context.application_recent_message_count, 2)
+        self.assertEqual(settings.context.application_summary_max_chars, 420)
+        self.assertEqual(settings.context.application_summary_min_message_chars, 5)
 
     def test_from_env_reads_reply_debounce_settings(self) -> None:
         with patch.dict(
@@ -233,6 +239,9 @@ class AppSettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.context.recent_message_count, 8)
         self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
+        self.assertEqual(settings.context.application_recent_message_count, 4)
+        self.assertEqual(settings.context.application_summary_max_chars, 900)
+        self.assertEqual(settings.context.application_summary_min_message_chars, 8)
         self.assertEqual(settings.reply.debounce_ms, 1000.0)
         self.assertTrue(settings.reply.policy_enabled)
         self.assertEqual(settings.reply.min_gap_ms, 6000.0)

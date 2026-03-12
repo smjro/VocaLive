@@ -475,6 +475,15 @@ class ConversationOrchestrator:
                 conversation_summary_max_chars=(
                     self.settings.context.conversation_summary_max_chars
                 ),
+                application_recent_message_count=(
+                    self.settings.context.application_recent_message_count
+                ),
+                application_summary_max_chars=(
+                    self.settings.context.application_summary_max_chars
+                ),
+                application_summary_min_message_chars=(
+                    self.settings.context.application_summary_min_message_chars
+                ),
             )
         )
         language_instruction = _build_conversation_language_instruction(conversation_language)

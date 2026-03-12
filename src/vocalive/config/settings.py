@@ -153,6 +153,9 @@ class ConversationSettings:
 class ContextSettings:
     recent_message_count: int = 8
     conversation_summary_max_chars: int = 1200
+    application_recent_message_count: int = 4
+    application_summary_max_chars: int = 900
+    application_summary_min_message_chars: int = 8
 
 
 @dataclass
@@ -221,6 +224,18 @@ class AppSettings:
                 conversation_summary_max_chars=_read_int(
                     "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
                     default=1200,
+                ),
+                application_recent_message_count=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
+                    default=4,
+                ),
+                application_summary_max_chars=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",
+                    default=900,
+                ),
+                application_summary_min_message_chars=_read_int(
+                    "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS",
+                    default=8,
                 ),
             ),
             input=InputSettings(
