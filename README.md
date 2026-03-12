@@ -27,6 +27,7 @@ The repository currently ships with:
 - Implemented: trigger-based named-window screenshot capture for Gemini input on macOS
 - Implemented: AivisSpeech synthesis over the local HTTP API
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
+- Implemented: bounded LLM request compaction with an earlier-conversation summary plus a recent raw-message window
 - Implemented: structured JSON logging and in-memory stage latency metrics
 - Implemented: unit tests for settings, device resolution, utterance accumulation, provider payload/selection logic, queue behavior, and orchestration
 - Not implemented yet: streaming partial STT / LLM / TTS
@@ -108,6 +109,7 @@ Application-audio notes:
 Screen-capture notes:
 
 - screen capture is request-scoped, not persistent session history
+- older user/assistant turns are compacted into one system summary when the request window grows past the configured raw-message count
 - capture is triggered only when the normalized user utterance contains one of the configured trigger phrases
 - the current implementation resolves the first on-screen window whose title or owner name matches `VOCALIVE_SCREEN_WINDOW_NAME`
 - captured screenshots are downscaled so the longest edge is at most `1280px` before they are attached to Gemini; set `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` empty to disable that
@@ -171,6 +173,8 @@ All runtime configuration is environment-driven.
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
+| `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
+| `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30` | Gemini HTTP timeout |
@@ -202,6 +206,7 @@ Current provider support:
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
 - optional application-audio capture resolves one running macOS app, segments its audio into utterances, and by default submits those transcripts as labeled application context without immediate assistant replies
 - optional screen capture resolves a named on-screen window on macOS and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
+- older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command
 - provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters

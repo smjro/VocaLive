@@ -20,6 +20,7 @@ from vocalive.models import (
     SynthesizedSpeech,
     TurnContext,
 )
+from vocalive.pipeline.context import build_compacted_messages
 from vocalive.pipeline.interruption import (
     CancellationToken,
     InterruptionController,
@@ -359,7 +360,15 @@ class ConversationOrchestrator:
         )
 
     def _build_request_messages(self, conversation_language: str | None) -> tuple[ConversationMessage, ...]:
-        messages = list(self.session.snapshot())
+        messages = list(
+            build_compacted_messages(
+                self.session.snapshot(),
+                recent_message_count=self.settings.context.recent_message_count,
+                conversation_summary_max_chars=(
+                    self.settings.context.conversation_summary_max_chars
+                ),
+            )
+        )
         language_instruction = _build_conversation_language_instruction(conversation_language)
         if language_instruction is not None:
             messages.insert(0, ConversationMessage(role="system", content=language_instruction))

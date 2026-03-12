@@ -18,6 +18,7 @@ from vocalive.config.settings import (
     AppSettings,
     ApplicationAudioMode,
     ApplicationAudioSettings,
+    ContextSettings,
     QueueSettings,
     QueueOverflowStrategy,
     ScreenCaptureSettings,
@@ -268,6 +269,51 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 ("user", "hello"),
             ],
+        )
+
+    async def test_long_conversation_is_compacted_into_summary_plus_recent_window(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                context=ContextSettings(
+                    recent_message_count=1,
+                    conversation_summary_max_chars=220,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("alpha"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("bravo"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 2)
+        request_messages = language_model.requests[1].messages
+        self.assertEqual(request_messages[0].role, "system")
+        self.assertIn("The conversation language is Japanese.", request_messages[0].content)
+        self.assertEqual(request_messages[1].role, "system")
+        self.assertIn("Earlier conversation summary:", request_messages[1].content)
+        self.assertIn("alpha", request_messages[1].content)
+        self.assertIn("captured", request_messages[1].content)
+        self.assertEqual(
+            [(message.role, message.content) for message in request_messages[2:]],
+            [("user", "bravo")],
         )
 
     async def test_trigger_phrase_adds_screen_capture_parts_to_current_turn(self) -> None:

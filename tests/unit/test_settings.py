@@ -191,6 +191,20 @@ class AppSettingsTests(unittest.TestCase):
         self.assertFalse(settings.application_audio.adaptive_vad_enabled)
         self.assertFalse(settings.application_audio.stt_enhancement_enabled)
 
+    def test_from_env_reads_context_compaction_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT": "5",
+                "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS": "640",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.context.recent_message_count, 5)
+        self.assertEqual(settings.context.conversation_summary_max_chars, 640)
+
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             settings = AppSettings.from_env()
@@ -199,6 +213,8 @@ class AppSettingsTests(unittest.TestCase):
             settings.screen_capture.trigger_phrases,
             DEFAULT_SCREEN_TRIGGER_PHRASES,
         )
+        self.assertEqual(settings.context.recent_message_count, 8)
+        self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
         self.assertFalse(settings.application_audio.enabled)
         self.assertEqual(
             settings.application_audio.mode,
