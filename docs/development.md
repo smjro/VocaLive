@@ -10,6 +10,15 @@ python3 -m unittest discover -s tests -v
 python3 -m compileall src tests
 ```
 
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m vocalive
+python -m unittest discover -s tests -v
+python -m compileall src tests
+```
+
 Editable install is optional:
 
 ```bash
@@ -31,11 +40,11 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_INPUT_PROVIDER=stdin` keeps the text shell
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
 - live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
-- `VOCALIVE_APP_AUDIO_ENABLED=true` layers macOS application-audio capture on top of either `stdin` or `microphone`
+- `VOCALIVE_APP_AUDIO_ENABLED=true` layers application-audio capture on top of either `stdin` or `microphone`
 - `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; application-audio segments are transcribed and appended to session history without immediately triggering LLM/TTS
 - set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application audio to behave like a normal live turn and interrupt stale playback
 - application-audio turns are stored in session history as labeled application context, not as user messages
-- application-audio capture currently requires macOS, `VOCALIVE_APP_AUDIO_TARGET`, and Screen Recording permission
+- application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
 - application-audio capture uses adaptive energy-based VAD by default and can fall back to fixed thresholding with `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false`
 - Moonshine applies low-frequency-preserving speech enhancement to application-audio segments before transcription unless `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
@@ -51,17 +60,21 @@ The current entry point is `src/vocalive/main.py`.
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
 - microphone reply suppression is enabled by default for low-value live chatter; explicit questions/requests still bypass the policy
 - older application-audio context is compacted into its own bounded summary while the newest configured app-audio messages stay verbatim in Gemini requests
-- `VOCALIVE_MIC_DEVICE=external` forces selection of a connected headset-like external mic
-- when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected external mic over a built-in default input
+- `VOCALIVE_MIC_DEVICE=external` forces selection of a connected external mic, including Bluetooth hands-free inputs when they are the best match
+- when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected higher-fidelity external mic over a built-in default input and skips Bluetooth hands-free / AG Audio inputs during auto-selection
 - the microphone path uses local RMS thresholding plus silence timing, not a production VAD
 - the stdin shell sets `AudioSegment.transcript_hint`, so `moonshine`-selected configs can still exercise Gemini and Aivis wiring before switching to live microphone capture
 - when screen capture is enabled, configured trigger phrases attach one screenshot of the configured window to the current Gemini turn only
 
-Speaker playback uses `afplay {path}` by default on macOS. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
+Speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
 
-Screen capture currently uses the macOS `screencapture` command, resolves the configured on-screen window by title or owner name, and requires Screen Recording permission.
+Windows supports the full `stdin` / `microphone` / `application audio` / `screen capture` / overlay / speaker path. On Windows, application audio records WASAPI process loopback scoped to the selected process tree while the selected process remains alive.
 
-Application-audio capture currently uses a small ScreenCaptureKit helper compiled on first use, resolves one running app by name or bundle identifier, and also requires Screen Recording permission.
+On Windows, Bluetooth hands-free microphone profiles often force headset playback into low-fidelity call mode while the mic is active. VocaLive therefore avoids auto-selecting those inputs unless `VOCALIVE_MIC_DEVICE` is set explicitly.
+
+Screen capture resolves the configured on-screen window by title or owner name. macOS uses `screencapture` and requires Screen Recording permission; Windows uses a small C# helper built with `csc.exe`.
+
+Application-audio capture uses a small helper compiled on first use. macOS uses ScreenCaptureKit and resolves one running app by name or bundle identifier; Windows resolves a process name, executable path, or window title and captures WASAPI process loopback for that process tree while the selected process stays alive.
 
 ## Configuration
 
@@ -76,16 +89,16 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_MIC_CHANNELS` | `1` | Captured microphone channel count |
 | `VOCALIVE_MIC_BLOCK_MS` | `40` | Duration of each captured PCM block |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
-| `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected headset-like external mic when the default input looks built-in |
+| `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection skips Bluetooth hands-free inputs |
 | `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
 | `VOCALIVE_MIC_PRE_SPEECH_MS` | `200` | Audio kept before speech starts so utterance onsets are not clipped |
 | `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200` | Keeps an utterance in the speech state briefly after the threshold drops |
 | `VOCALIVE_MIC_SILENCE_MS` | `500` | Silence required before the live path emits a buffered utterance |
 | `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250` | Minimum buffered audio before turn-end emission is allowed |
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered utterance |
-| `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables macOS application-audio capture as an extra live source |
+| `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an extra live source |
 | `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts as session context only; `respond` makes app audio trigger live assistant turns |
-| `VOCALIVE_APP_AUDIO_TARGET` | unset | Required selector matched against running application name first, then bundle identifier |
+| `VOCALIVE_APP_AUDIO_TARGET` | unset | Required selector. macOS matches application name first then bundle identifier; Windows matches process name, executable path, or main window title |
 | `VOCALIVE_APP_AUDIO_SAMPLE_RATE` | `16000` | Application-audio sample rate after helper-side conversion |
 | `VOCALIVE_APP_AUDIO_CHANNELS` | `1` | Captured application-audio channel count |
 | `VOCALIVE_APP_AUDIO_BLOCK_MS` | `40` | Duration of each buffered application-audio PCM block |
@@ -127,7 +140,7 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required selector matched against on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases matched against the normalized utterance |
-| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for macOS window lookup and `screencapture` |
+| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | Local AivisSpeech engine base URL |
@@ -135,7 +148,7 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Optional speaker name for `/speakers` lookup |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Optional style name for `/speakers` lookup |
 | `VOCALIVE_AIVIS_TIMEOUT_SECONDS` | `30` | AivisSpeech API timeout |
-| `VOCALIVE_SPEAKER_COMMAND` | `afplay {path}` | Override playback command; must include `{path}` |
+| `VOCALIVE_SPEAKER_COMMAND` | platform default | Override playback command; must include `{path}`. Defaults to `afplay {path}` on macOS and PowerShell `SoundPlayer` on Windows |
 | `VOCALIVE_QUEUE_MAXSIZE` | `4` | Bounded utterance backlog |
 | `VOCALIVE_QUEUE_OVERFLOW` | `drop_oldest` | `drop_oldest` or `reject_new` |
 
@@ -161,7 +174,7 @@ Screen capture can be layered on combinations 2 and 3 when:
 
 - `VOCALIVE_SCREEN_CAPTURE_ENABLED=true`
 - `VOCALIVE_MODEL_PROVIDER=gemini`
-- the app is running on macOS with Screen Recording permission
+- the app is running on macOS with Screen Recording permission, or on Windows with `csc.exe` available
 
 The second combination is useful because the stdin shell supplies `transcript_hint`, which lets the real-provider assembly come up before the live microphone path is enabled.
 

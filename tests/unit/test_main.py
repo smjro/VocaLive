@@ -28,6 +28,7 @@ from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator, build_overlay
 from vocalive.models import AudioSegment
 from vocalive.screen.macos import MacOSWindowScreenCapture
+from vocalive.screen.windows import WindowsWindowScreenCapture
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
 from vocalive.ui.overlay import OverlayServer
@@ -112,8 +113,8 @@ class BuildOrchestratorTests(unittest.TestCase):
                 return None
 
         with patch("vocalive.main.sys.platform", "darwin"), patch(
-            "vocalive.main.MacOSApplicationAudioInput",
-            _FakeApplicationAudioInput,
+            "vocalive.main._application_audio_input_class_for_platform",
+            return_value=_FakeApplicationAudioInput,
         ):
             audio_input = build_audio_input(
                 AppSettings(
@@ -155,8 +156,8 @@ class BuildOrchestratorTests(unittest.TestCase):
                 return None
 
         with patch("vocalive.main.sys.platform", "darwin"), patch(
-            "vocalive.main.MacOSApplicationAudioInput",
-            _FakeApplicationAudioInput,
+            "vocalive.main._application_audio_input_class_for_platform",
+            return_value=_FakeApplicationAudioInput,
         ):
             build_audio_input(
                 AppSettings(
@@ -170,6 +171,21 @@ class BuildOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(len(captured_kwargs), 1)
         self.assertTrue(captured_kwargs[0]["speech_start_events_enabled"])
+
+    def test_build_audio_input_supports_windows_application_audio(self) -> None:
+        with patch("vocalive.main.sys.platform", "win32"):
+            audio_input = build_audio_input(
+                AppSettings(
+                    application_audio=ApplicationAudioSettings(
+                        enabled=True,
+                        target="chrome",
+                    ),
+                )
+            )
+
+        self.assertIsNotNone(audio_input)
+        assert audio_input is not None
+        self.assertEqual(type(audio_input).__name__, "WindowsApplicationAudioInput")
 
     def test_build_orchestrator_can_disable_application_audio_enhancement(self) -> None:
         orchestrator = build_orchestrator(
@@ -220,6 +236,27 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertEqual(orchestrator.screen_capture_engine.timeout_seconds, 7.0)
         self.assertEqual(orchestrator.screen_capture_engine.resize_max_edge_px, 960)
 
+    def test_build_orchestrator_enables_screen_capture_for_gemini_on_windows(self) -> None:
+        with patch("vocalive.main.sys.platform", "win32"):
+            orchestrator = build_orchestrator(
+                AppSettings(
+                    model_provider="gemini",
+                    screen_capture=ScreenCaptureSettings(
+                        enabled=True,
+                        window_name="Chrome",
+                        timeout_seconds=6.0,
+                        resize_max_edge_px=1024,
+                    ),
+                )
+            )
+
+        self.assertIsInstance(orchestrator.language_model, GeminiLanguageModel)
+        self.assertIsInstance(orchestrator.screen_capture_engine, WindowsWindowScreenCapture)
+        assert isinstance(orchestrator.screen_capture_engine, WindowsWindowScreenCapture)
+        self.assertEqual(orchestrator.screen_capture_engine.window_name, "Chrome")
+        self.assertEqual(orchestrator.screen_capture_engine.timeout_seconds, 6.0)
+        self.assertEqual(orchestrator.screen_capture_engine.resize_max_edge_px, 1024)
+
     def test_build_orchestrator_rejects_screen_capture_without_gemini(self) -> None:
         with self.assertRaisesRegex(
             ValueError,
@@ -241,6 +278,22 @@ class BuildOrchestratorTests(unittest.TestCase):
                     AppSettings(
                         model_provider="gemini",
                         screen_capture=ScreenCaptureSettings(enabled=True),
+                    )
+                )
+
+    def test_build_orchestrator_rejects_screen_capture_on_unsupported_platform(self) -> None:
+        with patch("vocalive.main.sys.platform", "linux"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "screen capture input currently supports macOS and Windows only",
+            ):
+                build_orchestrator(
+                    AppSettings(
+                        model_provider="gemini",
+                        screen_capture=ScreenCaptureSettings(
+                            enabled=True,
+                            window_name="YouTube",
+                        ),
                     )
                 )
 

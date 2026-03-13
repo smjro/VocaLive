@@ -5,6 +5,7 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
@@ -12,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from vocalive.audio.devices import resolve_input_device
-from vocalive.audio.input import CombinedAudioInput, UtteranceAccumulator
+from vocalive.audio.input import CombinedAudioInput, MicrophoneAudioInput, UtteranceAccumulator
 from vocalive.audio.speech_detection import AdaptiveEnergySpeechDetector
 from vocalive.models import AudioSegment
 from vocalive.audio.vad import FixedSilenceTurnDetector
@@ -220,7 +221,7 @@ class UtteranceAccumulatorTests(unittest.TestCase):
 
 
 class InputDeviceResolutionTests(unittest.TestCase):
-    def test_prefers_external_headset_when_default_is_builtin(self) -> None:
+    def test_keeps_default_when_only_external_candidate_is_hands_free(self) -> None:
         sounddevice = _FakeSounddevice(
             devices=[
                 {"name": "MacBook Pro Microphone", "max_input_channels": 1},
@@ -231,9 +232,25 @@ class InputDeviceResolutionTests(unittest.TestCase):
 
         match = resolve_input_device(sounddevice, requested_device=None, prefer_external=True)
 
-        self.assertEqual(match.index, 1)
+        self.assertEqual(match.index, 0)
+        self.assertEqual(match.selection, "default")
+        self.assertIn("MacBook Pro Microphone", match.label)
+
+    def test_prefers_usb_input_over_hands_free_when_default_is_builtin(self) -> None:
+        sounddevice = _FakeSounddevice(
+            devices=[
+                {"name": "MacBook Pro Microphone", "max_input_channels": 1},
+                {"name": "AirPods Pro Hands-Free", "max_input_channels": 1},
+                {"name": "USB Audio Interface", "max_input_channels": 1},
+            ],
+            default_input_index=0,
+        )
+
+        match = resolve_input_device(sounddevice, requested_device=None, prefer_external=True)
+
+        self.assertEqual(match.index, 2)
         self.assertEqual(match.selection, "external")
-        self.assertIn("AirPods Pro Hands-Free", match.label)
+        self.assertIn("USB Audio Interface", match.label)
 
     def test_keeps_system_default_when_it_is_already_external(self) -> None:
         sounddevice = _FakeSounddevice(
@@ -273,6 +290,92 @@ class InputDeviceResolutionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "No external input device was found"):
             resolve_input_device(sounddevice, requested_device="external", prefer_external=True)
+
+    def test_explicit_external_can_still_select_hands_free_input(self) -> None:
+        sounddevice = _FakeSounddevice(
+            devices=[
+                {"name": "MacBook Pro Microphone", "max_input_channels": 1},
+                {"name": "AirPods Pro Hands-Free", "max_input_channels": 1},
+            ],
+            default_input_index=0,
+        )
+
+        match = resolve_input_device(sounddevice, requested_device="external", prefer_external=True)
+
+        self.assertEqual(match.index, 1)
+        self.assertEqual(match.selection, "external")
+        self.assertIn("AirPods Pro Hands-Free", match.label)
+
+
+class _FakeRawInputStream:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.callback = kwargs.get("callback")
+        self.started = False
+        self.stopped = False
+        self.closed = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeStreamingSounddevice(_FakeSounddevice):
+    def __init__(self, devices: list[dict[str, object]], default_input_index: int | None) -> None:
+        super().__init__(devices=devices, default_input_index=default_input_index)
+        self.streams: list[_FakeRawInputStream] = []
+
+    def RawInputStream(self, **kwargs) -> _FakeRawInputStream:
+        stream = _FakeRawInputStream(**kwargs)
+        self.streams.append(stream)
+        return stream
+
+
+class MicrophoneAudioInputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reads_microphone_chunks_via_callback_stream(self) -> None:
+        sounddevice = _FakeStreamingSounddevice(
+            devices=[
+                {"name": "Built-in Microphone", "max_input_channels": 1},
+            ],
+            default_input_index=0,
+        )
+        audio_input = MicrophoneAudioInput(
+            sample_rate_hz=1_000,
+            block_duration_ms=100.0,
+            speech_threshold=0.01,
+            speech_hold_ms=0.0,
+            silence_threshold_ms=100.0,
+            min_utterance_ms=100.0,
+        )
+
+        with patch("vocalive.audio.input._import_sounddevice", return_value=sounddevice):
+            selected_label = await audio_input.start()
+            self.assertEqual(selected_label, "Built-in Microphone (id=0)")
+            self.assertEqual(len(sounddevice.streams), 1)
+            stream = sounddevice.streams[0]
+            self.assertTrue(stream.started)
+            self.assertIsNotNone(stream.callback)
+            read_task = asyncio.create_task(audio_input.read())
+
+            assert stream.callback is not None
+            stream.callback(_pcm_chunk(frame_count=100, amplitude=2_000), 100, None, None)
+            stream.callback(_pcm_chunk(frame_count=100, amplitude=0), 100, None, None)
+
+            segment = await asyncio.wait_for(read_task, timeout=1.0)
+
+        self.assertIsNotNone(segment)
+        assert segment is not None
+        self.assertEqual(segment.sample_rate_hz, 1_000)
+        self.assertGreater(len(segment.pcm), 0)
+
+        await audio_input.close()
+        self.assertTrue(stream.stopped)
+        self.assertTrue(stream.closed)
 
 
 class _ScriptedAudioInput:

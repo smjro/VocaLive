@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import importlib
+import queue
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -305,6 +306,8 @@ class MicrophoneAudioInput(AudioInput):
         )
         self._stream: Any | None = None
         self._selected_device: InputDeviceMatch | None = None
+        self._chunk_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=32)
+        self._dropped_chunk_count = 0
         self._closed = False
 
     async def start(self) -> str:
@@ -314,16 +317,18 @@ class MicrophoneAudioInput(AudioInput):
     async def read(self) -> AudioSegment | None:
         if self._closed:
             return None
-        stream = self._ensure_stream()
-        while not self._closed:
-            chunk = await asyncio.to_thread(self._read_chunk, stream)
+        self._ensure_stream()
+        while True:
+            chunk = await asyncio.to_thread(self._read_chunk)
+            if chunk is None:
+                return self._accumulator.flush()
             segment = self._accumulator.add_chunk(chunk)
             if segment is not None:
                 return segment
-        return self._accumulator.flush()
 
     async def close(self) -> None:
         self._closed = True
+        self._signal_reader_shutdown()
         stream = self._stream
         self._stream = None
         if stream is None:
@@ -370,9 +375,10 @@ class MicrophoneAudioInput(AudioInput):
             device=selected_device.index,
             channels=self.channels,
             dtype="int16",
+            callback=self._handle_stream_chunk,
         )
-        stream.start()
         self._selected_device = selected_device
+        stream.start()
         log_event(
             logger,
             "microphone_stream_started",
@@ -385,12 +391,42 @@ class MicrophoneAudioInput(AudioInput):
         self._stream = stream
         return stream
 
-    def _read_chunk(self, stream: Any) -> bytes:
-        chunk, overflowed = stream.read(self.frames_per_block)
-        if overflowed:
-            # Preserve the chunk even when the backend reports an overrun.
-            return bytes(chunk)
-        return bytes(chunk)
+    def _handle_stream_chunk(
+        self,
+        indata: Any,
+        frames: int,
+        time_info: Any,
+        status: Any,
+    ) -> None:
+        del frames, time_info, status
+        if self._closed:
+            return
+        self._push_chunk(bytes(indata))
+
+    def _read_chunk(self) -> bytes | None:
+        return self._chunk_queue.get()
+
+    def _push_chunk(self, chunk: bytes | None) -> None:
+        while True:
+            try:
+                self._chunk_queue.put_nowait(chunk)
+                return
+            except queue.Full:
+                try:
+                    self._chunk_queue.get_nowait()
+                except queue.Empty:
+                    return
+                if chunk is not None:
+                    self._dropped_chunk_count += 1
+                    if self._dropped_chunk_count == 1:
+                        log_event(
+                            logger,
+                            "microphone_chunk_queue_overflow",
+                            device=self.selected_device_label,
+                        )
+
+    def _signal_reader_shutdown(self) -> None:
+        self._push_chunk(None)
 
     async def _wait_for_background_tasks(self) -> None:
         if not self._background_tasks:
