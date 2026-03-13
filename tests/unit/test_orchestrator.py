@@ -272,8 +272,15 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(language_model.requests), 1)
         self.assertEqual(
-            [(message.role, message.content) for message in language_model.requests[0].messages[:2]],
+            [(message.role, message.content) for message in language_model.requests[0].messages[:3]],
             [
+                (
+                    "system",
+                    "Your name is コハク. "
+                    "The user's name is ましま. "
+                    "Understand that you are speaking directly with ましま, and use those names "
+                    "correctly whenever either name matters in the reply.",
+                ),
                 (
                     "system",
                     "The conversation language is Japanese. "
@@ -318,13 +325,15 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(language_model.requests), 2)
         request_messages = language_model.requests[1].messages
         self.assertEqual(request_messages[0].role, "system")
-        self.assertIn("The conversation language is Japanese.", request_messages[0].content)
+        self.assertIn("Your name is コハク.", request_messages[0].content)
         self.assertEqual(request_messages[1].role, "system")
-        self.assertIn("Earlier conversation summary:", request_messages[1].content)
-        self.assertIn("alpha", request_messages[1].content)
-        self.assertIn("captured", request_messages[1].content)
+        self.assertIn("The conversation language is Japanese.", request_messages[1].content)
+        self.assertEqual(request_messages[2].role, "system")
+        self.assertIn("Earlier conversation summary:", request_messages[2].content)
+        self.assertIn("alpha", request_messages[2].content)
+        self.assertIn("captured", request_messages[2].content)
         self.assertEqual(
-            [(message.role, message.content) for message in request_messages[2:]],
+            [(message.role, message.content) for message in request_messages[3:]],
             [("user", "bravo")],
         )
 
@@ -642,8 +651,15 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(
-            [(message.role, message.content) for message in language_model.requests[0].messages[:2]],
+            [(message.role, message.content) for message in language_model.requests[0].messages[:3]],
             [
+                (
+                    "system",
+                    "Your name is コハク. "
+                    "The user's name is ましま. "
+                    "Understand that you are speaking directly with ましま, and use those names "
+                    "correctly whenever either name matters in the reply.",
+                ),
                 (
                     "system",
                     "The conversation language is Japanese. "
@@ -746,10 +762,12 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(language_model.requests), 1)
         request_messages = language_model.requests[0].messages
         self.assertEqual(request_messages[1].role, "system")
-        self.assertIn("Earlier application audio summary:", request_messages[1].content)
-        self.assertIn("boss incoming", request_messages[1].content)
+        self.assertIn("The conversation language is Japanese.", request_messages[1].content)
+        self.assertEqual(request_messages[2].role, "system")
+        self.assertIn("Earlier application audio summary:", request_messages[2].content)
+        self.assertIn("boss incoming", request_messages[2].content)
         self.assertEqual(
-            [(message.role, message.content) for message in request_messages[2:]],
+            [(message.role, message.content) for message in request_messages[3:]],
             [
                 ("application", "Application audio (Steam): door opened"),
                 ("user", "どうする？"),

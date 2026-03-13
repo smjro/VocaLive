@@ -50,6 +50,9 @@ class AppSettingsTests(unittest.TestCase):
             settings.gemini.system_instruction,
             DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
         )
+        assert settings.gemini.system_instruction is not None
+        self.assertIn("your name is コハク", settings.gemini.system_instruction.lower())
+        self.assertIn("ましま", settings.gemini.system_instruction)
         self.assertEqual(settings.conversation.language, "ja")
 
     def test_from_env_allows_overriding_gemini_thinking_budget(self) -> None:

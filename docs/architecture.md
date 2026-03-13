@@ -55,7 +55,7 @@ shared pipeline
   -> optionally capture the configured window for the current turn when a trigger phrase matches
   -> compact older user/assistant history into one bounded summary while keeping a recent raw-message window
   -> compact older application-audio context into a separate bounded summary while keeping a recent raw app-context window
-  -> prepend conversation-language system instruction when configured
+  -> prepend participant-identity system instruction and the conversation-language system instruction when configured
   -> LLM adapter
   -> split assistant text into sentence-sized chunks
   -> emit conversation events for optional UI sinks
@@ -130,7 +130,7 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 - user messages are appended after STT completes
 - application-audio transcripts are appended after STT completes as labeled `application` context messages, not user messages
 - in the default `context_only` mode, those application messages do not immediately trigger LLM/TTS; they are consumed on the next user-driven turn
-- the LLM receives a compacted session view: recent user/assistant raw messages, one bounded earlier-conversation summary, recent application-audio raw messages, one bounded earlier application-audio summary, and an optional conversation-language system instruction
+- the LLM receives a compacted session view: recent user/assistant raw messages, one bounded earlier-conversation summary, recent application-audio raw messages, one bounded earlier application-audio summary, a fixed participant-identity system instruction, and an optional conversation-language system instruction
 - screen captures are request-scoped extras for the current user turn only and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
 - interrupted assistant replies are therefore not committed to session history

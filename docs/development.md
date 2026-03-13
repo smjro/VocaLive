@@ -136,7 +136,7 @@ Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/confi
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30` | Gemini HTTP timeout |
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
-| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it |
+| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku/Mashima surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required selector matched against on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases matched against the normalized utterance |

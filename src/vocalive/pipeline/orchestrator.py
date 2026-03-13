@@ -544,9 +544,16 @@ class ConversationOrchestrator:
                 ),
             )
         )
+        identity_instruction = _build_participant_identity_instruction()
+        if identity_instruction is not None:
+            messages.insert(0, ConversationMessage(role="system", content=identity_instruction))
         language_instruction = _build_conversation_language_instruction(conversation_language)
         if language_instruction is not None:
-            messages.insert(0, ConversationMessage(role="system", content=language_instruction))
+            insertion_index = 1 if identity_instruction is not None else 0
+            messages.insert(
+                insertion_index,
+                ConversationMessage(role="system", content=language_instruction),
+            )
         return tuple(messages)
 
     def _emit_event(self, event: ConversationEvent) -> None:
@@ -628,6 +635,15 @@ class ConversationOrchestrator:
             byte_length=len(screenshot.data),
         )
         return _build_screen_capture_parts(screenshot, settings.window_name)
+
+
+def _build_participant_identity_instruction() -> str:
+    return (
+        "Your name is コハク. "
+        "The user's name is ましま. "
+        "Understand that you are speaking directly with ましま, and use those names correctly "
+        "whenever either name matters in the reply."
+    )
 
 
 def _build_conversation_language_instruction(language: str | None) -> str | None:
