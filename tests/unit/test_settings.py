@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,10 +17,34 @@ from vocalive.config.settings import (
     ApplicationAudioMode,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
     DEFAULT_SCREEN_TRIGGER_PHRASES,
+    controller_setting_definitions,
+    controller_setting_rows,
+    controller_setting_schema,
+    normalize_controller_values,
 )
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_from_mapping_matches_from_env(self) -> None:
+        payload = {
+            "VOCALIVE_SESSION_ID": "session-fixed",
+            "VOCALIVE_STT_PROVIDER": "Moonshine Voice",
+            "VOCALIVE_MODEL_PROVIDER": "Google Gemini",
+            "VOCALIVE_TTS_PROVIDER": "Aivis Speech",
+            "VOCALIVE_INPUT_PROVIDER": "microphone",
+            "VOCALIVE_APP_AUDIO_ENABLED": "true",
+            "VOCALIVE_APP_AUDIO_TARGET": "Steam",
+            "VOCALIVE_OVERLAY_ENABLED": "true",
+            "VOCALIVE_GEMINI_API_KEY": "secret",
+            "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION": "",
+        }
+
+        with patch.dict(os.environ, payload, clear=True):
+            from_env = AppSettings.from_env()
+            from_mapping = AppSettings.from_mapping(dict(os.environ))
+
+        self.assertEqual(asdict(from_env), asdict(from_mapping))
+
     def test_from_env_normalizes_real_provider_aliases(self) -> None:
         with patch.dict(
             os.environ,
@@ -291,3 +316,134 @@ class AppSettingsTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "Unsupported application audio mode"):
                 AppSettings.from_env()
+
+    def test_controller_setting_definitions_cover_expected_env_names(self) -> None:
+        expected_names = {
+            "VOCALIVE_SESSION_ID",
+            "VOCALIVE_LOG_LEVEL",
+            "VOCALIVE_STT_PROVIDER",
+            "VOCALIVE_MODEL_PROVIDER",
+            "VOCALIVE_TTS_PROVIDER",
+            "VOCALIVE_QUEUE_MAXSIZE",
+            "VOCALIVE_QUEUE_OVERFLOW",
+            "VOCALIVE_CONVERSATION_LANGUAGE",
+            "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
+            "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
+            "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
+            "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",
+            "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS",
+            "VOCALIVE_INPUT_PROVIDER",
+            "VOCALIVE_MIC_SAMPLE_RATE",
+            "VOCALIVE_MIC_CHANNELS",
+            "VOCALIVE_MIC_BLOCK_MS",
+            "VOCALIVE_MIC_SPEECH_THRESHOLD",
+            "VOCALIVE_MIC_PRE_SPEECH_MS",
+            "VOCALIVE_MIC_SPEECH_HOLD_MS",
+            "VOCALIVE_MIC_SILENCE_MS",
+            "VOCALIVE_MIC_MIN_UTTERANCE_MS",
+            "VOCALIVE_MIC_MAX_UTTERANCE_MS",
+            "VOCALIVE_MIC_DEVICE",
+            "VOCALIVE_MIC_PREFER_EXTERNAL",
+            "VOCALIVE_APP_AUDIO_ENABLED",
+            "VOCALIVE_APP_AUDIO_MODE",
+            "VOCALIVE_APP_AUDIO_TARGET",
+            "VOCALIVE_APP_AUDIO_SAMPLE_RATE",
+            "VOCALIVE_APP_AUDIO_CHANNELS",
+            "VOCALIVE_APP_AUDIO_BLOCK_MS",
+            "VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD",
+            "VOCALIVE_APP_AUDIO_PRE_SPEECH_MS",
+            "VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS",
+            "VOCALIVE_APP_AUDIO_SILENCE_MS",
+            "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS",
+            "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS",
+            "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
+            "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
+            "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
+            "VOCALIVE_OUTPUT_PROVIDER",
+            "VOCALIVE_SPEAKER_COMMAND",
+            "VOCALIVE_OVERLAY_ENABLED",
+            "VOCALIVE_OVERLAY_HOST",
+            "VOCALIVE_OVERLAY_PORT",
+            "VOCALIVE_OVERLAY_AUTO_OPEN",
+            "VOCALIVE_OVERLAY_TITLE",
+            "VOCALIVE_OVERLAY_CHARACTER_NAME",
+            "VOCALIVE_REPLY_DEBOUNCE_MS",
+            "VOCALIVE_REPLY_POLICY_ENABLED",
+            "VOCALIVE_REPLY_MIN_GAP_MS",
+            "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
+            "VOCALIVE_GEMINI_API_KEY",
+            "VOCALIVE_GEMINI_MODEL",
+            "VOCALIVE_GEMINI_TIMEOUT_SECONDS",
+            "VOCALIVE_GEMINI_TEMPERATURE",
+            "VOCALIVE_GEMINI_THINKING_BUDGET",
+            "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
+            "VOCALIVE_SCREEN_CAPTURE_ENABLED",
+            "VOCALIVE_SCREEN_WINDOW_NAME",
+            "VOCALIVE_SCREEN_TRIGGER_PHRASES",
+            "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
+            "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
+            "VOCALIVE_MOONSHINE_MODEL",
+            "VOCALIVE_AIVIS_BASE_URL",
+            "VOCALIVE_AIVIS_SPEAKER_ID",
+            "VOCALIVE_AIVIS_SPEAKER_NAME",
+            "VOCALIVE_AIVIS_STYLE_NAME",
+            "VOCALIVE_AIVIS_TIMEOUT_SECONDS",
+        }
+
+        actual_names = {
+            definition.env_name for definition in controller_setting_definitions()
+        }
+        self.assertEqual(actual_names, expected_names)
+
+    def test_controller_setting_schema_includes_documentation(self) -> None:
+        schema = controller_setting_schema()
+
+        self.assertTrue(schema)
+        for field in schema:
+            self.assertIn("default_label", field)
+            self.assertIn("description", field)
+            self.assertIsInstance(field["default_label"], str)
+            self.assertIsInstance(field["description"], str)
+            self.assertTrue(field["description"])
+
+    def test_readme_configuration_table_matches_controller_setting_rows(self) -> None:
+        readme_path = Path(__file__).resolve().parents[2] / "README.md"
+        text = readme_path.read_text(encoding="utf-8")
+        start = text.index("| Variable | Default | Purpose |")
+        end = text.index("\n\nCurrent provider support:")
+        lines = text[start:end].splitlines()[2:]
+
+        actual_rows: dict[str, dict[str, str]] = {}
+        for line in lines:
+            parts = [part.strip() for part in line.strip().strip("|").split("|")]
+            if len(parts) != 3:
+                continue
+            env_name, default_label, description = parts
+            actual_rows[env_name.strip("`")] = {
+                "default_label": default_label.strip("`"),
+                "description": description,
+            }
+
+        expected_rows = {
+            row["env_name"]: {
+                "default_label": row["default_label"],
+                "description": row["description"],
+            }
+            for row in controller_setting_rows()
+        }
+
+        self.assertEqual(actual_rows, expected_rows)
+
+    def test_normalize_controller_values_filters_unknown_keys_and_applies_defaults(self) -> None:
+        normalized = normalize_controller_values(
+            {
+                "VOCALIVE_LOG_LEVEL": "DEBUG",
+                "VOCALIVE_OVERLAY_ENABLED": "true",
+                "UNRELATED_VALUE": "ignored",
+            }
+        )
+
+        self.assertEqual(normalized["VOCALIVE_LOG_LEVEL"], "DEBUG")
+        self.assertEqual(normalized["VOCALIVE_OVERLAY_ENABLED"], "true")
+        self.assertEqual(normalized["VOCALIVE_INPUT_PROVIDER"], "stdin")
+        self.assertNotIn("UNRELATED_VALUE", normalized)

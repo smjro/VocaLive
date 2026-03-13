@@ -28,6 +28,7 @@ htmlcov/
 # Local environment files
 .env
 .env.*
+.vocalive/
 .python-version
 
 # Editor and OS files

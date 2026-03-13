@@ -13,7 +13,14 @@ Current design priorities:
 
 ## Runtime modes
 
-The current entry point supports two primary input modes plus an optional extra live source:
+The current entry point has two launch surfaces:
+
+1. `controller` (default)
+   `python -m vocalive` starts a local browser controller on localhost, loads the saved config file, and can start or stop the live runtime without rebuilding env state each time.
+2. `headless run`
+   `python -m vocalive run` loads the saved config, applies current env overrides, and starts the runtime directly.
+
+The runtime itself still supports two primary input modes plus an optional extra live source:
 
 1. `stdin`
    Typed text is converted to `AudioSegment.from_text()` and submitted through the same orchestrator used by the live path.
@@ -90,8 +97,11 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 | `pipeline/session.py` | Ordered conversation history for one session |
 | `pipeline/events.py` | Conversation lifecycle events emitted to optional presentation sinks |
 | `pipeline/orchestrator.py` | End-to-end turn execution and playback chunk prefetch |
-| `config/settings.py` | Environment-driven settings, defaults, aliases, and provider normalization |
-| `ui/` | Local HTTP/SSE overlay server, transparent character overlay, and asset loading |
+| `config/settings.py` | Env-shaped settings, controller schema metadata, defaults, aliases, and provider normalization |
+| `config/controller_store.py` | Versioned saved-controller config persistence |
+| `runtime.py` | Shared runtime assembly and headless execution helpers |
+| `ui/controller.py` | Local HTTP controller UI and runtime lifecycle management |
+| `ui/overlay.py` | Local HTTP/SSE overlay server and transparent character overlay |
 | `util/logging.py` | Structured JSON log helpers |
 | `util/metrics.py` | In-memory stage latency recording |
 
@@ -139,7 +149,7 @@ This commit policy is important. Changes that alter it should be treated as beha
 
 ## Provider assembly
 
-The current adapter assembly happens in `build_orchestrator()` inside `src/vocalive/main.py`.
+The current adapter assembly happens in `build_orchestrator()` inside `src/vocalive/runtime.py`.
 
 Default development assembly:
 
@@ -159,6 +169,7 @@ Optional real adapters:
 
 Optional presentation path:
 
+- `ControllerServer` serves the local browser controller, persists the env-shaped config file, and owns the live runtime start/stop lifecycle
 - `OverlayServer` subscribes to orchestrator events and serves a local browser overlay
 - the overlay reveals each playback chunk progressively over the chunk's estimated playback duration
 - the overlay currently renders only the character and assistant speech text; captions are shown in front of the lower body so the face stays visible
@@ -178,7 +189,7 @@ Current compatibility constraints:
 - screen capture currently supports macOS and Windows and resolves the first on-screen window that matches the configured title or owner name
 - speaker playback depends on an external playback command and defaults to `afplay` on macOS and PowerShell `SoundPlayer` on Windows
 
-The stdin shell still works with the real-provider assembly because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
+The stdin shell still works with the real-provider assembly in explicit `python -m vocalive run` mode because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
 
 When `segment.source == "application_audio"`, the current Moonshine adapter applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization before transcription. This is intentionally scoped to application audio so the microphone path stays unchanged.
 

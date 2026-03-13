@@ -4,7 +4,8 @@ VocaLive is an adapter-based local voice conversation runtime focused on low lat
 
 The repository currently ships with:
 
-- a stdin shell for local development
+- a local browser controller that saves the full runtime configuration
+- an explicit headless `run` mode with the legacy stdin shell for local development
 - optional live microphone capture via `sounddevice`
 - optional application-audio capture for one named running app on macOS or Windows
 - mock providers for end-to-end local testing
@@ -17,6 +18,7 @@ The repository currently ships with:
 - Implemented: bounded queue orchestration with explicit overflow handling
 - Implemented: stale-turn interruption on new utterances
 - Implemented: microphone speech-start barge-in before turn-end emission
+- Implemented: local browser GUI controller with saved full-config editing, runtime start/stop, and explicit headless `run` mode
 - Implemented: stdin shell and microphone capture with preroll / hold / silence-based utterance detection
 - Implemented: automatic preference for higher-fidelity external microphones when the system default input is built-in, while avoiding Bluetooth hands-free inputs unless explicitly requested
 - Implemented: optional macOS per-app application-audio capture and Windows process-loopback application-audio capture, both feeding STT and storing transcripts as application context by default
@@ -41,11 +43,13 @@ The repository currently ships with:
 
 ## Quick start
 
-Run directly from the source tree:
+Start the local browser controller from the source tree:
 
 ```bash
 PYTHONPATH=src python3 -m vocalive
 ```
+
+This opens a controller page in your default browser, stores settings in `.vocalive/controller-config.json`, and lets you start or stop the live runtime without re-entering variables.
 
 Windows PowerShell:
 
@@ -61,13 +65,21 @@ python3 -m pip install -e .
 python3 -m vocalive
 ```
 
+Run the saved configuration directly without the controller:
+
+```bash
+PYTHONPATH=src python3 -m vocalive run
+```
+
+`run` loads `.vocalive/controller-config.json` first, then applies any current environment-variable overrides on top. Use this mode when you want the legacy stdin shell or scriptable env-driven startup.
+
 Install the optional voice dependencies when you want live microphone capture or Moonshine STT:
 
 ```bash
 python3 -m pip install -e '.[voice]'
 ```
 
-Run the full local voice path against Moonshine, Gemini, AivisSpeech, and speaker playback:
+Run the full local voice path against Moonshine, Gemini, AivisSpeech, and speaker playback in explicit headless mode:
 
 ```bash
 export VOCALIVE_INPUT_PROVIDER=microphone
@@ -84,10 +96,12 @@ export VOCALIVE_SCREEN_WINDOW_NAME="Steam"
 export VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX=1280
 export VOCALIVE_AIVIS_BASE_URL=http://127.0.0.1:10101
 export VOCALIVE_GEMINI_API_KEY=...
-PYTHONPATH=src python3 -m vocalive
+PYTHONPATH=src python3 -m vocalive run
 ```
 
-On Windows PowerShell, set the same variables with `$env:NAME = "value"` and run `python -m vocalive`.
+On Windows PowerShell, set the same variables with `$env:NAME = "value"` and run `python -m vocalive run`.
+
+If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved config file.
 
 When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay is transparent, renders the character on the right, and shows assistant text only while the assistant is actively speaking. Each sentence-sized chunk is revealed progressively to match playback timing, then cleared when playback finishes or is interrupted.
 
@@ -145,7 +159,7 @@ Screen-capture notes:
 - macOS uses a small Objective-C helper plus `screencapture`; Windows uses a C# helper that captures the target window with `PrintWindow` and a `BitBlt` fallback
 - if macOS screen recording permission is missing, the turn falls back to text-only input and logs `screen_capture_failed`
 
-The stdin shell can also exercise the Gemini and Aivis wiring without a microphone. Typed input is stored as `AudioSegment.transcript_hint`, so a `moonshine` configuration can still run cleanly before you switch to live microphone mode. The first real Moonshine transcription downloads and caches the selected model files.
+The stdin shell is still available in `python -m vocalive run` when `VOCALIVE_INPUT_PROVIDER=stdin`. Typed input is stored as `AudioSegment.transcript_hint`, so a `moonshine` configuration can still run cleanly before you switch to live microphone mode. The first real Moonshine transcription downloads and caches the selected model files.
 
 ## Development commands
 
@@ -163,79 +177,83 @@ python3 -m compileall src tests
 
 ## Configuration
 
-All runtime configuration is environment-driven.
+The default workflow is controller-driven: `python -m vocalive` edits and persists the full env-shaped config in `.vocalive/controller-config.json`.
+
+`python -m vocalive run` keeps the runtime env-compatible by loading the saved config first and then applying current environment variables as overrides.
+
+The controller UI exposes the same per-setting descriptions through each field's `Info` toggle.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `VOCALIVE_SESSION_ID` | random UUID | Stable identifier for one conversation session |
 | `VOCALIVE_LOG_LEVEL` | `INFO` | Python logging level |
-| `VOCALIVE_INPUT_PROVIDER` | `stdin` | `stdin` or `microphone` |
-| `VOCALIVE_MIC_SAMPLE_RATE` | `16000` | Microphone capture sample rate |
-| `VOCALIVE_MIC_CHANNELS` | `1` | Captured microphone channel count |
-| `VOCALIVE_MIC_BLOCK_MS` | `40` | Duration of each captured PCM block |
-| `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
-| `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
-| `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
-| `VOCALIVE_MIC_PRE_SPEECH_MS` | `200` | Audio kept before speech starts so utterance onsets are not clipped |
-| `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200` | Keep an utterance in the speech state briefly after the threshold drops |
-| `VOCALIVE_MIC_SILENCE_MS` | `500` | Silence required before emitting the buffered utterance |
-| `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250` | Minimum buffered audio before end-of-turn detection may emit |
-| `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered utterance |
-| `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
-| `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
-| `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |
-| `VOCALIVE_APP_AUDIO_SAMPLE_RATE` | `16000` | Application-audio capture sample rate after helper-side conversion |
-| `VOCALIVE_APP_AUDIO_CHANNELS` | `1` | Captured application-audio channel count |
-| `VOCALIVE_APP_AUDIO_BLOCK_MS` | `40` | Duration of each buffered application-audio PCM block |
-| `VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD` | `0.02` | Minimum floor for application-audio speech detection; adaptive VAD treats it as a fallback absolute threshold |
-| `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS` | `200` | Buffered application audio kept before speech onset |
-| `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS` | `320` | Keeps application audio in the speech state briefly after the threshold drops |
-| `VOCALIVE_APP_AUDIO_SILENCE_MS` | `650` | Silence required before emitting a buffered application-audio utterance |
-| `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250` | Minimum buffered application audio before end-of-turn detection may emit |
-| `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered application-audio utterance |
-| `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10` | Timeout for application lookup, helper startup, and helper build floor |
-| `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
-| `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine` and aliases such as `moonshine voice` |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
-| `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
-| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local transparent browser overlay with speech-only captions |
-| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Host/interface used by the overlay HTTP server |
-| `VOCALIVE_OVERLAY_PORT` | `8765` | Port used by the overlay HTTP server |
-| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
-| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
-| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept verbatim in Gemini requests before older app context is compacted |
 | `VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS` | `900` | Character budget for the earlier application-audio summary injected ahead of the recent raw app-context window |
 | `VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS` | `8` | Minimum normalized application-audio message length kept in the older app-context summary |
-| `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
+| `VOCALIVE_QUEUE_MAXSIZE` | `4` | Maximum queued utterances waiting to run |
+| `VOCALIVE_QUEUE_OVERFLOW` | `drop_oldest` | Overflow strategy: `drop_oldest` or `reject_new` |
+| `VOCALIVE_INPUT_PROVIDER` | `stdin` | `stdin` or `microphone` |
+| `VOCALIVE_MIC_SAMPLE_RATE` | `16000` | Microphone capture sample rate |
+| `VOCALIVE_MIC_CHANNELS` | `1` | Captured microphone channel count |
+| `VOCALIVE_MIC_BLOCK_MS` | `40.0` | Duration of each captured PCM block |
+| `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
+| `VOCALIVE_MIC_PRE_SPEECH_MS` | `200.0` | Audio kept before speech starts so utterance onsets are not clipped |
+| `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200.0` | Keep an utterance in the speech state briefly after the threshold drops |
+| `VOCALIVE_MIC_SILENCE_MS` | `500.0` | Silence required before emitting the buffered utterance |
+| `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered audio before end-of-turn detection may emit |
+| `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered utterance |
+| `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
+| `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
+| `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
+| `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
+| `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |
+| `VOCALIVE_APP_AUDIO_SAMPLE_RATE` | `16000` | Application-audio capture sample rate after helper-side conversion |
+| `VOCALIVE_APP_AUDIO_CHANNELS` | `1` | Captured application-audio channel count |
+| `VOCALIVE_APP_AUDIO_BLOCK_MS` | `40.0` | Duration of each buffered application-audio PCM block |
+| `VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD` | `0.02` | Minimum floor for application-audio speech detection; adaptive VAD treats it as a fallback absolute threshold |
+| `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS` | `200.0` | Buffered application audio kept before speech onset |
+| `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS` | `320.0` | Keeps application audio in the speech state briefly after the threshold drops |
+| `VOCALIVE_APP_AUDIO_SILENCE_MS` | `650.0` | Silence required before emitting a buffered application-audio utterance |
+| `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered application audio before end-of-turn detection may emit |
+| `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered application-audio utterance |
+| `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10.0` | Timeout for application lookup, helper startup, and helper build floor |
+| `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
+| `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
+| `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
+| `VOCALIVE_SPEAKER_COMMAND` | platform default | Override playback command; must include `{path}`. Defaults to `afplay {path}` on macOS and PowerShell `SoundPlayer` on Windows |
+| `VOCALIVE_OVERLAY_ENABLED` | `false` | Start the local transparent browser overlay with speech-only captions |
+| `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Host/interface used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_PORT` | `8765` | Port used by the overlay HTTP server |
+| `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
+| `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
+| `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
+| `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000.0` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
-| `VOCALIVE_REPLY_MIN_GAP_MS` | `6000` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
+| `VOCALIVE_REPLY_MIN_GAP_MS` | `6000.0` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
 | `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
-| `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30` | Gemini HTTP timeout |
+| `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30.0` | Gemini HTTP timeout |
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
 | `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku/Mashima surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |
-| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for window lookup and platform capture helpers |
+| `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5.0` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | AivisSpeech engine base URL |
 | `VOCALIVE_AIVIS_SPEAKER_ID` | unset | Explicit AivisSpeech style ID |
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Speaker name to resolve via `/speakers` |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Style name to resolve via `/speakers` |
-| `VOCALIVE_AIVIS_TIMEOUT_SECONDS` | `30` | AivisSpeech API timeout |
-| `VOCALIVE_SPEAKER_COMMAND` | platform default | Override playback command; must include `{path}`. Defaults to `afplay {path}` on macOS and PowerShell `SoundPlayer` on Windows |
-| `VOCALIVE_QUEUE_MAXSIZE` | `4` | Maximum queued utterances waiting to run |
-| `VOCALIVE_QUEUE_OVERFLOW` | `drop_oldest` | Overflow strategy: `drop_oldest` or `reject_new` |
+| `VOCALIVE_AIVIS_TIMEOUT_SECONDS` | `30.0` | AivisSpeech API timeout |
 
 Current provider support:
 
@@ -261,15 +279,16 @@ Current provider support:
 ```text
 src/vocalive/
   audio/       audio input, output, turn detection, and device selection
-  config/      environment-driven runtime configuration
+  config/      controller-backed and env-compatible runtime configuration
   llm/         language model interface and adapters
   pipeline/    orchestration, cancellation, queues, and session state
+  runtime.py   shared runtime assembly for controller and headless modes
   screen/      optional named-window screen capture adapters
   stt/         speech-to-text interface and adapters
   tts/         text-to-speech interface and adapters
-  ui/          local browser overlay server, transparent character UI, and overlay assets
+  ui/          local browser controller, overlay server, and UI assets
   util/        logging, metrics, and time helpers
-  main.py      CLI entry point and adapter assembly
+  main.py      entry point for controller mode and explicit `run` mode
 
 tests/unit/    unit coverage for settings, adapters, audio, and orchestration
 docs/          architecture, development, and documentation maintenance rules

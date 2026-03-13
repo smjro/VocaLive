@@ -6,6 +6,7 @@ Recommended local commands:
 
 ```bash
 PYTHONPATH=src python3 -m vocalive
+PYTHONPATH=src python3 -m vocalive run
 python3 -m unittest discover -s tests -v
 python3 -m compileall src tests
 ```
@@ -15,6 +16,7 @@ Windows PowerShell:
 ```powershell
 $env:PYTHONPATH = "src"
 python -m vocalive
+python -m vocalive run
 python -m unittest discover -s tests -v
 python -m compileall src tests
 ```
@@ -33,11 +35,14 @@ python3 -m pip install -e '.[voice]'
 
 The repository currently requires Python 3.10+.
 
-## CLI behavior
+## Launch behavior
 
 The current entry point is `src/vocalive/main.py`.
 
-- `VOCALIVE_INPUT_PROVIDER=stdin` keeps the text shell
+- `python -m vocalive` starts the local browser controller, loads `.vocalive/controller-config.json`, and opens the controller page on localhost
+- the controller edits and persists the full env-shaped runtime config, then starts or stops the live runtime from the browser UI
+- `python -m vocalive run` starts the runtime directly using the saved config plus current environment-variable overrides
+- `VOCALIVE_INPUT_PROVIDER=stdin` keeps the text shell, but only in explicit `run` mode
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
 - live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` layers application-audio capture on top of either `stdin` or `microphone`
@@ -52,6 +57,7 @@ The current entry point is `src/vocalive/main.py`.
 - when `VOCALIVE_OVERLAY_AUTO_OPEN=true`, startup asks the system browser to open the overlay automatically
 - the overlay shows captions only while audio is actively playing and clears them on completion or interruption
 - place custom character art at `src/vocalive/ui/assets/character.png`; when the file is missing the built-in vector character is used
+- controller mode rejects `VOCALIVE_INPUT_PROVIDER=stdin`; use `python -m vocalive run` when you want the stdin shell
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking, so speech onset can stop stale playback immediately
@@ -78,7 +84,11 @@ Application-audio capture uses a small helper compiled on first use. macOS uses 
 
 ## Configuration
 
-Runtime settings are loaded from `AppSettings.from_env()` in `src/vocalive/config/settings.py`.
+Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocalive/config/settings.py`.
+
+- controller mode persists recognized `VOCALIVE_*` values in `.vocalive/controller-config.json`
+- `python -m vocalive run` loads that file first, then overlays current environment variables
+- the runtime still accepts the same env variable names shown below
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -159,13 +169,13 @@ If you add a new setting, update this table and the root `README.md`.
 Useful working combinations today:
 
 1. Default local shell
-   `stdin` + `mock` STT + `mock` model + `mock` TTS + `memory`
+   `python -m vocalive run` with `stdin` + `mock` STT + `mock` model + `mock` TTS + `memory`
 2. Real remote/local providers without microphone
-   `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
+   `python -m vocalive run` with `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
 3. Full live voice path
-   `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
+   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
 4. Live voice path with overlay
-   `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
+   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
 5. Game/video commentary path
    `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` + `gemini` + `aivis` + `memory` or `speaker`
    default app-audio behavior is `VOCALIVE_APP_AUDIO_MODE=context_only`; set `VOCALIVE_APP_AUDIO_MODE=respond` only when immediate replies to app dialogue are desired

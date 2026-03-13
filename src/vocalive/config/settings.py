@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 
 
@@ -50,6 +51,9 @@ DEFAULT_SCREEN_TRIGGER_PHRASES = (
     "スクショ見て",
 )
 
+_TRUTHY_VALUES = {"1", "true", "yes", "on"}
+_FALSY_VALUES = {"0", "false", "no", "off"}
+
 
 class QueueOverflowStrategy(str, Enum):
     REJECT_NEW = "reject_new"
@@ -69,6 +73,552 @@ class OutputProvider(str, Enum):
 class ApplicationAudioMode(str, Enum):
     CONTEXT_ONLY = "context_only"
     RESPOND = "respond"
+
+
+@dataclass(frozen=True)
+class SettingDefinition:
+    env_name: str
+    group: str
+    kind: str
+    default_raw: str | None
+    nullable: bool = False
+    secret: bool = False
+    multiline: bool = False
+    options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SettingDocumentation:
+    description: str
+    default_label: str | None = None
+
+
+def _enum_values(enum_class: type[Enum]) -> tuple[str, ...]:
+    return tuple(str(member.value) for member in enum_class)
+
+
+CONTROLLER_SETTING_DEFINITIONS = (
+    SettingDefinition("VOCALIVE_SESSION_ID", "general", "string", None, nullable=True),
+    SettingDefinition(
+        "VOCALIVE_LOG_LEVEL",
+        "general",
+        "enum",
+        "INFO",
+        options=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+    ),
+    SettingDefinition(
+        "VOCALIVE_STT_PROVIDER",
+        "providers",
+        "enum",
+        "mock",
+        options=("mock", "moonshine"),
+    ),
+    SettingDefinition(
+        "VOCALIVE_MODEL_PROVIDER",
+        "providers",
+        "enum",
+        "mock",
+        options=("mock", "gemini"),
+    ),
+    SettingDefinition(
+        "VOCALIVE_TTS_PROVIDER",
+        "providers",
+        "enum",
+        "mock",
+        options=("mock", "aivis"),
+    ),
+    SettingDefinition("VOCALIVE_QUEUE_MAXSIZE", "queue", "int", "4"),
+    SettingDefinition(
+        "VOCALIVE_QUEUE_OVERFLOW",
+        "queue",
+        "enum",
+        QueueOverflowStrategy.DROP_OLDEST.value,
+        options=_enum_values(QueueOverflowStrategy),
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_LANGUAGE",
+        "conversation",
+        "string",
+        "ja",
+        nullable=True,
+    ),
+    SettingDefinition("VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT", "context", "int", "8"),
+    SettingDefinition(
+        "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
+        "context",
+        "int",
+        "1200",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
+        "context",
+        "int",
+        "4",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",
+        "context",
+        "int",
+        "900",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS",
+        "context",
+        "int",
+        "8",
+    ),
+    SettingDefinition(
+        "VOCALIVE_INPUT_PROVIDER",
+        "input",
+        "enum",
+        InputProvider.STDIN.value,
+        options=_enum_values(InputProvider),
+    ),
+    SettingDefinition("VOCALIVE_MIC_SAMPLE_RATE", "input", "int", "16000"),
+    SettingDefinition("VOCALIVE_MIC_CHANNELS", "input", "int", "1"),
+    SettingDefinition("VOCALIVE_MIC_BLOCK_MS", "input", "float", "40.0"),
+    SettingDefinition("VOCALIVE_MIC_SPEECH_THRESHOLD", "input", "float", "0.02"),
+    SettingDefinition("VOCALIVE_MIC_PRE_SPEECH_MS", "input", "float", "200.0"),
+    SettingDefinition("VOCALIVE_MIC_SPEECH_HOLD_MS", "input", "float", "200.0"),
+    SettingDefinition("VOCALIVE_MIC_SILENCE_MS", "input", "float", "500.0"),
+    SettingDefinition("VOCALIVE_MIC_MIN_UTTERANCE_MS", "input", "float", "250.0"),
+    SettingDefinition("VOCALIVE_MIC_MAX_UTTERANCE_MS", "input", "float", "15000.0"),
+    SettingDefinition("VOCALIVE_MIC_DEVICE", "input", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_MIC_PREFER_EXTERNAL", "input", "bool", "true"),
+    SettingDefinition("VOCALIVE_APP_AUDIO_ENABLED", "application_audio", "bool", "false"),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_MODE",
+        "application_audio",
+        "enum",
+        ApplicationAudioMode.CONTEXT_ONLY.value,
+        options=_enum_values(ApplicationAudioMode),
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_TARGET",
+        "application_audio",
+        "string",
+        None,
+        nullable=True,
+    ),
+    SettingDefinition("VOCALIVE_APP_AUDIO_SAMPLE_RATE", "application_audio", "int", "16000"),
+    SettingDefinition("VOCALIVE_APP_AUDIO_CHANNELS", "application_audio", "int", "1"),
+    SettingDefinition("VOCALIVE_APP_AUDIO_BLOCK_MS", "application_audio", "float", "40.0"),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD",
+        "application_audio",
+        "float",
+        "0.02",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_PRE_SPEECH_MS",
+        "application_audio",
+        "float",
+        "200.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS",
+        "application_audio",
+        "float",
+        "320.0",
+    ),
+    SettingDefinition("VOCALIVE_APP_AUDIO_SILENCE_MS", "application_audio", "float", "650.0"),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS",
+        "application_audio",
+        "float",
+        "250.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS",
+        "application_audio",
+        "float",
+        "15000.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
+        "application_audio",
+        "float",
+        "10.0",
+    ),
+    SettingDefinition("VOCALIVE_APP_AUDIO_ADAPTIVE_VAD", "application_audio", "bool", "true"),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
+        "application_audio",
+        "bool",
+        "true",
+    ),
+    SettingDefinition(
+        "VOCALIVE_OUTPUT_PROVIDER",
+        "output",
+        "enum",
+        OutputProvider.MEMORY.value,
+        options=_enum_values(OutputProvider),
+    ),
+    SettingDefinition("VOCALIVE_SPEAKER_COMMAND", "output", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_OVERLAY_ENABLED", "overlay", "bool", "false"),
+    SettingDefinition("VOCALIVE_OVERLAY_HOST", "overlay", "string", "127.0.0.1"),
+    SettingDefinition("VOCALIVE_OVERLAY_PORT", "overlay", "int", "8765"),
+    SettingDefinition("VOCALIVE_OVERLAY_AUTO_OPEN", "overlay", "bool", "true"),
+    SettingDefinition("VOCALIVE_OVERLAY_TITLE", "overlay", "string", "VocaLive Overlay"),
+    SettingDefinition("VOCALIVE_OVERLAY_CHARACTER_NAME", "overlay", "string", "Tora"),
+    SettingDefinition("VOCALIVE_REPLY_DEBOUNCE_MS", "reply", "float", "1000.0"),
+    SettingDefinition("VOCALIVE_REPLY_POLICY_ENABLED", "reply", "bool", "true"),
+    SettingDefinition("VOCALIVE_REPLY_MIN_GAP_MS", "reply", "float", "6000.0"),
+    SettingDefinition("VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS", "reply", "int", "12"),
+    SettingDefinition(
+        "VOCALIVE_GEMINI_API_KEY",
+        "gemini",
+        "string",
+        None,
+        nullable=True,
+        secret=True,
+    ),
+    SettingDefinition("VOCALIVE_GEMINI_MODEL", "gemini", "string", "gemini-2.5-flash"),
+    SettingDefinition("VOCALIVE_GEMINI_TIMEOUT_SECONDS", "gemini", "float", "30.0"),
+    SettingDefinition(
+        "VOCALIVE_GEMINI_TEMPERATURE",
+        "gemini",
+        "float",
+        None,
+        nullable=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_GEMINI_THINKING_BUDGET",
+        "gemini",
+        "int",
+        "0",
+        nullable=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
+        "gemini",
+        "string",
+        DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+        nullable=True,
+        multiline=True,
+    ),
+    SettingDefinition("VOCALIVE_SCREEN_CAPTURE_ENABLED", "screen_capture", "bool", "false"),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_WINDOW_NAME",
+        "screen_capture",
+        "string",
+        None,
+        nullable=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_TRIGGER_PHRASES",
+        "screen_capture",
+        "tuple",
+        ",".join(DEFAULT_SCREEN_TRIGGER_PHRASES),
+        nullable=True,
+        multiline=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
+        "screen_capture",
+        "float",
+        "5.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
+        "screen_capture",
+        "int",
+        "1280",
+        nullable=True,
+    ),
+    SettingDefinition("VOCALIVE_MOONSHINE_MODEL", "moonshine", "string", "base"),
+    SettingDefinition("VOCALIVE_AIVIS_BASE_URL", "aivis", "string", "http://127.0.0.1:10101"),
+    SettingDefinition("VOCALIVE_AIVIS_SPEAKER_ID", "aivis", "int", None, nullable=True),
+    SettingDefinition("VOCALIVE_AIVIS_SPEAKER_NAME", "aivis", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_AIVIS_STYLE_NAME", "aivis", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_AIVIS_TIMEOUT_SECONDS", "aivis", "float", "30.0"),
+)
+
+_CONTROLLER_SETTING_INDEX = {
+    definition.env_name: definition for definition in CONTROLLER_SETTING_DEFINITIONS
+}
+
+_CONTROLLER_SETTING_DOCUMENTATION = {
+    "VOCALIVE_SESSION_ID": SettingDocumentation(
+        description="Stable identifier for one conversation session",
+        default_label="random UUID",
+    ),
+    "VOCALIVE_LOG_LEVEL": SettingDocumentation(description="Python logging level"),
+    "VOCALIVE_INPUT_PROVIDER": SettingDocumentation(description="`stdin` or `microphone`"),
+    "VOCALIVE_MIC_SAMPLE_RATE": SettingDocumentation(description="Microphone capture sample rate"),
+    "VOCALIVE_MIC_CHANNELS": SettingDocumentation(description="Captured microphone channel count"),
+    "VOCALIVE_MIC_BLOCK_MS": SettingDocumentation(description="Duration of each captured PCM block"),
+    "VOCALIVE_MIC_DEVICE": SettingDocumentation(
+        description="Optional input device id, device name, `default`, or `external`"
+    ),
+    "VOCALIVE_MIC_PREFER_EXTERNAL": SettingDocumentation(
+        description=(
+            "Prefer a connected higher-fidelity external mic when the default input looks "
+            "built-in; auto-selection avoids Bluetooth hands-free inputs"
+        )
+    ),
+    "VOCALIVE_MIC_SPEECH_THRESHOLD": SettingDocumentation(
+        description="RMS threshold for treating a block as speech"
+    ),
+    "VOCALIVE_MIC_PRE_SPEECH_MS": SettingDocumentation(
+        description="Audio kept before speech starts so utterance onsets are not clipped"
+    ),
+    "VOCALIVE_MIC_SPEECH_HOLD_MS": SettingDocumentation(
+        description="Keep an utterance in the speech state briefly after the threshold drops"
+    ),
+    "VOCALIVE_MIC_SILENCE_MS": SettingDocumentation(
+        description="Silence required before emitting the buffered utterance"
+    ),
+    "VOCALIVE_MIC_MIN_UTTERANCE_MS": SettingDocumentation(
+        description="Minimum buffered audio before end-of-turn detection may emit"
+    ),
+    "VOCALIVE_MIC_MAX_UTTERANCE_MS": SettingDocumentation(
+        description="Hard cap for one buffered utterance"
+    ),
+    "VOCALIVE_APP_AUDIO_ENABLED": SettingDocumentation(
+        description="Enables application-audio capture as an additional live input"
+    ),
+    "VOCALIVE_APP_AUDIO_MODE": SettingDocumentation(
+        description=(
+            "`context_only` stores app transcripts in session without immediate assistant "
+            "replies; `respond` makes app audio behave like normal live turns"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_TARGET": SettingDocumentation(
+        description=(
+            "Required application selector; on macOS it matches application name first then "
+            "bundle identifier, and on Windows it matches process name, executable path, or "
+            "main window title"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_SAMPLE_RATE": SettingDocumentation(
+        description="Application-audio capture sample rate after helper-side conversion"
+    ),
+    "VOCALIVE_APP_AUDIO_CHANNELS": SettingDocumentation(
+        description="Captured application-audio channel count"
+    ),
+    "VOCALIVE_APP_AUDIO_BLOCK_MS": SettingDocumentation(
+        description="Duration of each buffered application-audio PCM block"
+    ),
+    "VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD": SettingDocumentation(
+        description=(
+            "Minimum floor for application-audio speech detection; adaptive VAD treats it as "
+            "a fallback absolute threshold"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_PRE_SPEECH_MS": SettingDocumentation(
+        description="Buffered application audio kept before speech onset"
+    ),
+    "VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS": SettingDocumentation(
+        description="Keeps application audio in the speech state briefly after the threshold drops"
+    ),
+    "VOCALIVE_APP_AUDIO_SILENCE_MS": SettingDocumentation(
+        description="Silence required before emitting a buffered application-audio utterance"
+    ),
+    "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS": SettingDocumentation(
+        description="Minimum buffered application audio before end-of-turn detection may emit"
+    ),
+    "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS": SettingDocumentation(
+        description="Hard cap for one buffered application-audio utterance"
+    ),
+    "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS": SettingDocumentation(
+        description="Timeout for application lookup, helper startup, and helper build floor"
+    ),
+    "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD": SettingDocumentation(
+        description=(
+            "Enables adaptive energy-based VAD for application audio; `false` falls back to "
+            "fixed thresholding"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT": SettingDocumentation(
+        description="Enables lightweight application-audio speech enhancement before Moonshine STT"
+    ),
+    "VOCALIVE_STT_PROVIDER": SettingDocumentation(
+        description="STT adapter; accepts `moonshine` and aliases such as `moonshine voice`"
+    ),
+    "VOCALIVE_MODEL_PROVIDER": SettingDocumentation(
+        description="LLM adapter; accepts `gemini` and aliases such as `google gemini`"
+    ),
+    "VOCALIVE_TTS_PROVIDER": SettingDocumentation(
+        description="TTS adapter; accepts `aivis` and aliases such as `aivis speech`"
+    ),
+    "VOCALIVE_OUTPUT_PROVIDER": SettingDocumentation(description="`memory` or `speaker`"),
+    "VOCALIVE_OVERLAY_ENABLED": SettingDocumentation(
+        description="Start the local transparent browser overlay with speech-only captions"
+    ),
+    "VOCALIVE_OVERLAY_HOST": SettingDocumentation(
+        description="Host/interface used by the overlay HTTP server"
+    ),
+    "VOCALIVE_OVERLAY_PORT": SettingDocumentation(
+        description="Port used by the overlay HTTP server"
+    ),
+    "VOCALIVE_OVERLAY_AUTO_OPEN": SettingDocumentation(
+        description="Ask the system browser to open the overlay page automatically"
+    ),
+    "VOCALIVE_OVERLAY_TITLE": SettingDocumentation(
+        description="Browser page title for the overlay"
+    ),
+    "VOCALIVE_OVERLAY_CHARACTER_NAME": SettingDocumentation(
+        description="Accessibility label and page text for the overlay character"
+    ),
+    "VOCALIVE_CONVERSATION_LANGUAGE": SettingDocumentation(
+        description="Per-turn language instruction injected before the LLM call; set empty to disable"
+    ),
+    "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT": SettingDocumentation(
+        description=(
+            "Number of recent user/assistant messages kept verbatim in Gemini requests before "
+            "older dialogue is compacted"
+        )
+    ),
+    "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS": SettingDocumentation(
+        description=(
+            "Character budget for the earlier-conversation summary injected ahead of the "
+            "recent raw-message window"
+        )
+    ),
+    "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT": SettingDocumentation(
+        description=(
+            "Number of recent application-audio messages kept verbatim in Gemini requests "
+            "before older app context is compacted"
+        )
+    ),
+    "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS": SettingDocumentation(
+        description=(
+            "Character budget for the earlier application-audio summary injected ahead of the "
+            "recent raw app-context window"
+        )
+    ),
+    "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS": SettingDocumentation(
+        description="Minimum normalized application-audio message length kept in the older app-context summary"
+    ),
+    "VOCALIVE_REPLY_DEBOUNCE_MS": SettingDocumentation(
+        description=(
+            "Delay before a microphone user utterance is queued for the LLM so nearby "
+            "follow-up utterances can merge into one turn"
+        )
+    ),
+    "VOCALIVE_REPLY_POLICY_ENABLED": SettingDocumentation(
+        description="Enables conservative microphone reply suppression for low-value live chatter"
+    ),
+    "VOCALIVE_REPLY_MIN_GAP_MS": SettingDocumentation(
+        description=(
+            "Minimum time after a completed assistant reply during which short microphone "
+            "chatter is more likely to be suppressed"
+        )
+    ),
+    "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS": SettingDocumentation(
+        description="Maximum normalized length treated as a short microphone reaction for suppression heuristics"
+    ),
+    "VOCALIVE_GEMINI_API_KEY": SettingDocumentation(
+        description="Gemini API key; `GEMINI_API_KEY` is also accepted"
+    ),
+    "VOCALIVE_GEMINI_MODEL": SettingDocumentation(
+        description="Gemini model name used for `generateContent`"
+    ),
+    "VOCALIVE_GEMINI_TIMEOUT_SECONDS": SettingDocumentation(description="Gemini HTTP timeout"),
+    "VOCALIVE_GEMINI_TEMPERATURE": SettingDocumentation(
+        description="Optional Gemini generation temperature"
+    ),
+    "VOCALIVE_GEMINI_THINKING_BUDGET": SettingDocumentation(
+        description="Gemini 2.5 thinking budget; empty unsets it"
+    ),
+    "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION": SettingDocumentation(
+        description="Overrides the default Gemini character prompt; set empty to disable it entirely",
+        default_label="Kohaku/Mashima surreal deadpan persona prompt",
+    ),
+    "VOCALIVE_SCREEN_CAPTURE_ENABLED": SettingDocumentation(
+        description="Enables request-scoped named-window screenshot capture for Gemini turns"
+    ),
+    "VOCALIVE_SCREEN_WINDOW_NAME": SettingDocumentation(
+        description="Required window selector; matches on-screen window title first, then owner name"
+    ),
+    "VOCALIVE_SCREEN_TRIGGER_PHRASES": SettingDocumentation(
+        description="Comma-separated trigger phrases that cause a screenshot to be attached"
+    ),
+    "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS": SettingDocumentation(
+        description="Timeout for window lookup and platform capture helpers"
+    ),
+    "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX": SettingDocumentation(
+        description=(
+            "Resizes captured screenshots so their longest edge stays within this many pixels; "
+            "empty disables resizing"
+        )
+    ),
+    "VOCALIVE_MOONSHINE_MODEL": SettingDocumentation(
+        description="Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja`"
+    ),
+    "VOCALIVE_AIVIS_BASE_URL": SettingDocumentation(description="AivisSpeech engine base URL"),
+    "VOCALIVE_AIVIS_SPEAKER_ID": SettingDocumentation(
+        description="Explicit AivisSpeech style ID"
+    ),
+    "VOCALIVE_AIVIS_SPEAKER_NAME": SettingDocumentation(
+        description="Speaker name to resolve via `/speakers`"
+    ),
+    "VOCALIVE_AIVIS_STYLE_NAME": SettingDocumentation(
+        description="Style name to resolve via `/speakers`"
+    ),
+    "VOCALIVE_AIVIS_TIMEOUT_SECONDS": SettingDocumentation(
+        description="AivisSpeech API timeout"
+    ),
+    "VOCALIVE_SPEAKER_COMMAND": SettingDocumentation(
+        description=(
+            "Override playback command; must include `{path}`. Defaults to `afplay {path}` "
+            "on macOS and PowerShell `SoundPlayer` on Windows"
+        ),
+        default_label="platform default",
+    ),
+    "VOCALIVE_QUEUE_MAXSIZE": SettingDocumentation(
+        description="Maximum queued utterances waiting to run"
+    ),
+    "VOCALIVE_QUEUE_OVERFLOW": SettingDocumentation(
+        description="Overflow strategy: `drop_oldest` or `reject_new`"
+    ),
+}
+
+if set(_CONTROLLER_SETTING_DOCUMENTATION) != set(_CONTROLLER_SETTING_INDEX):
+    raise RuntimeError("Controller setting documentation must cover every controller setting")
+
+
+def _setting_default_label(definition: SettingDefinition) -> str:
+    documentation = _CONTROLLER_SETTING_DOCUMENTATION[definition.env_name]
+    if documentation.default_label is not None:
+        return documentation.default_label
+    if definition.default_raw is None:
+        return "unset"
+    return definition.default_raw
+
+
+def controller_setting_rows() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {
+            "env_name": definition.env_name,
+            "default_label": _setting_default_label(definition),
+            "description": _CONTROLLER_SETTING_DOCUMENTATION[definition.env_name].description,
+        }
+        for definition in CONTROLLER_SETTING_DEFINITIONS
+    )
+
+
+def controller_setting_definitions() -> tuple[SettingDefinition, ...]:
+    return CONTROLLER_SETTING_DEFINITIONS
+
+
+def controller_setting_schema() -> tuple[dict[str, object], ...]:
+    schema = []
+    for definition in CONTROLLER_SETTING_DEFINITIONS:
+        documentation = _CONTROLLER_SETTING_DOCUMENTATION[definition.env_name]
+        payload = asdict(definition)
+        payload["default_label"] = _setting_default_label(definition)
+        payload["description"] = documentation.description
+        schema.append(payload)
+    return tuple(schema)
+
+
+def controller_default_values() -> dict[str, str | None]:
+    return {
+        definition.env_name: definition.default_raw
+        for definition in CONTROLLER_SETTING_DEFINITIONS
+    }
 
 
 @dataclass
@@ -210,188 +760,420 @@ class AppSettings:
 
     @classmethod
     def from_env(cls) -> "AppSettings":
+        return cls.from_mapping(os.environ)
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, str | None]) -> "AppSettings":
         return cls(
-            session_id=os.getenv("VOCALIVE_SESSION_ID", uuid.uuid4().hex),
-            log_level=os.getenv("VOCALIVE_LOG_LEVEL", "INFO").upper(),
-            stt_provider=os.getenv("VOCALIVE_STT_PROVIDER", "mock"),
-            model_provider=os.getenv("VOCALIVE_MODEL_PROVIDER", "mock"),
-            tts_provider=os.getenv("VOCALIVE_TTS_PROVIDER", "mock"),
+            session_id=_read_str_with_default(
+                mapping,
+                "VOCALIVE_SESSION_ID",
+                default=uuid.uuid4().hex,
+            ),
+            log_level=_read_str_with_default(
+                mapping,
+                "VOCALIVE_LOG_LEVEL",
+                default="INFO",
+            ).upper(),
+            stt_provider=_read_str_with_default(
+                mapping,
+                "VOCALIVE_STT_PROVIDER",
+                default="mock",
+            ),
+            model_provider=_read_str_with_default(
+                mapping,
+                "VOCALIVE_MODEL_PROVIDER",
+                default="mock",
+            ),
+            tts_provider=_read_str_with_default(
+                mapping,
+                "VOCALIVE_TTS_PROVIDER",
+                default="mock",
+            ),
             queue=QueueSettings(
-                ingress_maxsize=_read_int("VOCALIVE_QUEUE_MAXSIZE", default=4),
+                ingress_maxsize=_read_int(mapping, "VOCALIVE_QUEUE_MAXSIZE", default=4),
                 overflow_strategy=QueueOverflowStrategy(
-                    os.getenv("VOCALIVE_QUEUE_OVERFLOW", QueueOverflowStrategy.DROP_OLDEST.value)
+                    _read_str_with_default(
+                        mapping,
+                        "VOCALIVE_QUEUE_OVERFLOW",
+                        default=QueueOverflowStrategy.DROP_OLDEST.value,
+                    )
                 ),
             ),
             conversation=ConversationSettings(
                 language=_read_optional_str_with_default(
+                    mapping,
                     "VOCALIVE_CONVERSATION_LANGUAGE",
                     default="ja",
                 ),
             ),
             context=ContextSettings(
                 recent_message_count=_read_int(
+                    mapping,
                     "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
                     default=8,
                 ),
                 conversation_summary_max_chars=_read_int(
+                    mapping,
                     "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
                     default=1200,
                 ),
                 application_recent_message_count=_read_int(
+                    mapping,
                     "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
                     default=4,
                 ),
                 application_summary_max_chars=_read_int(
+                    mapping,
                     "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",
                     default=900,
                 ),
                 application_summary_min_message_chars=_read_int(
+                    mapping,
                     "VOCALIVE_CONTEXT_APPLICATION_MIN_MESSAGE_CHARS",
                     default=8,
                 ),
             ),
             input=InputSettings(
-                provider=InputProvider(os.getenv("VOCALIVE_INPUT_PROVIDER", InputProvider.STDIN.value)),
-                sample_rate_hz=_read_int("VOCALIVE_MIC_SAMPLE_RATE", default=16_000),
-                channels=_read_int("VOCALIVE_MIC_CHANNELS", default=1),
-                block_duration_ms=_read_float("VOCALIVE_MIC_BLOCK_MS", default=40.0),
-                speech_threshold=_read_float("VOCALIVE_MIC_SPEECH_THRESHOLD", default=0.02),
-                pre_speech_ms=_read_float("VOCALIVE_MIC_PRE_SPEECH_MS", default=200.0),
-                speech_hold_ms=_read_float("VOCALIVE_MIC_SPEECH_HOLD_MS", default=200.0),
-                silence_threshold_ms=_read_float("VOCALIVE_MIC_SILENCE_MS", default=500.0),
-                min_utterance_ms=_read_float("VOCALIVE_MIC_MIN_UTTERANCE_MS", default=250.0),
-                max_utterance_ms=_read_float("VOCALIVE_MIC_MAX_UTTERANCE_MS", default=15_000.0),
-                device=_read_optional_device("VOCALIVE_MIC_DEVICE"),
+                provider=InputProvider(
+                    _read_str_with_default(
+                        mapping,
+                        "VOCALIVE_INPUT_PROVIDER",
+                        default=InputProvider.STDIN.value,
+                    )
+                ),
+                sample_rate_hz=_read_int(mapping, "VOCALIVE_MIC_SAMPLE_RATE", default=16_000),
+                channels=_read_int(mapping, "VOCALIVE_MIC_CHANNELS", default=1),
+                block_duration_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_BLOCK_MS",
+                    default=40.0,
+                ),
+                speech_threshold=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_SPEECH_THRESHOLD",
+                    default=0.02,
+                ),
+                pre_speech_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_PRE_SPEECH_MS",
+                    default=200.0,
+                ),
+                speech_hold_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_SPEECH_HOLD_MS",
+                    default=200.0,
+                ),
+                silence_threshold_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_SILENCE_MS",
+                    default=500.0,
+                ),
+                min_utterance_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_MIN_UTTERANCE_MS",
+                    default=250.0,
+                ),
+                max_utterance_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_MIC_MAX_UTTERANCE_MS",
+                    default=15_000.0,
+                ),
+                device=_read_optional_device(mapping, "VOCALIVE_MIC_DEVICE"),
                 prefer_external_device=_read_bool(
+                    mapping,
                     "VOCALIVE_MIC_PREFER_EXTERNAL",
                     default=True,
                 ),
             ),
             application_audio=ApplicationAudioSettings(
-                enabled=_read_bool("VOCALIVE_APP_AUDIO_ENABLED", default=False),
+                enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_ENABLED",
+                    default=False,
+                ),
                 mode=_read_application_audio_mode(
+                    mapping,
                     "VOCALIVE_APP_AUDIO_MODE",
                     default=ApplicationAudioMode.CONTEXT_ONLY,
                 ),
                 target=_read_optional_str_with_default(
+                    mapping,
                     "VOCALIVE_APP_AUDIO_TARGET",
                     default=None,
                 ),
-                sample_rate_hz=_read_int("VOCALIVE_APP_AUDIO_SAMPLE_RATE", default=16_000),
-                channels=_read_int("VOCALIVE_APP_AUDIO_CHANNELS", default=1),
-                block_duration_ms=_read_float("VOCALIVE_APP_AUDIO_BLOCK_MS", default=40.0),
-                speech_threshold=_read_float("VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD", default=0.02),
-                pre_speech_ms=_read_float("VOCALIVE_APP_AUDIO_PRE_SPEECH_MS", default=200.0),
-                speech_hold_ms=_read_float("VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS", default=320.0),
-                silence_threshold_ms=_read_float("VOCALIVE_APP_AUDIO_SILENCE_MS", default=650.0),
-                min_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS", default=250.0),
-                max_utterance_ms=_read_float("VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS", default=15_000.0),
-                timeout_seconds=_read_float("VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS", default=10.0),
+                sample_rate_hz=_read_int(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_SAMPLE_RATE",
+                    default=16_000,
+                ),
+                channels=_read_int(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_CHANNELS",
+                    default=1,
+                ),
+                block_duration_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_BLOCK_MS",
+                    default=40.0,
+                ),
+                speech_threshold=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_SPEECH_THRESHOLD",
+                    default=0.02,
+                ),
+                pre_speech_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_PRE_SPEECH_MS",
+                    default=200.0,
+                ),
+                speech_hold_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS",
+                    default=320.0,
+                ),
+                silence_threshold_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_SILENCE_MS",
+                    default=650.0,
+                ),
+                min_utterance_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS",
+                    default=250.0,
+                ),
+                max_utterance_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS",
+                    default=15_000.0,
+                ),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
+                    default=10.0,
+                ),
                 adaptive_vad_enabled=_read_bool(
+                    mapping,
                     "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
                     default=True,
                 ),
                 stt_enhancement_enabled=_read_bool(
+                    mapping,
                     "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
                     default=True,
                 ),
             ),
             output=OutputSettings(
                 provider=OutputProvider(
-                    os.getenv("VOCALIVE_OUTPUT_PROVIDER", OutputProvider.MEMORY.value)
+                    _read_str_with_default(
+                        mapping,
+                        "VOCALIVE_OUTPUT_PROVIDER",
+                        default=OutputProvider.MEMORY.value,
+                    )
                 ),
-                speaker_command=os.getenv("VOCALIVE_SPEAKER_COMMAND"),
+                speaker_command=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_SPEAKER_COMMAND",
+                    default=None,
+                ),
             ),
             overlay=OverlaySettings(
-                enabled=_read_bool("VOCALIVE_OVERLAY_ENABLED", default=False),
-                host=os.getenv("VOCALIVE_OVERLAY_HOST", "127.0.0.1"),
-                port=_read_int("VOCALIVE_OVERLAY_PORT", default=8765),
-                auto_open=_read_bool("VOCALIVE_OVERLAY_AUTO_OPEN", default=True),
-                title=os.getenv("VOCALIVE_OVERLAY_TITLE", "VocaLive Overlay"),
-                character_name=os.getenv("VOCALIVE_OVERLAY_CHARACTER_NAME", "Tora"),
+                enabled=_read_bool(mapping, "VOCALIVE_OVERLAY_ENABLED", default=False),
+                host=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_OVERLAY_HOST",
+                    default="127.0.0.1",
+                ),
+                port=_read_int(mapping, "VOCALIVE_OVERLAY_PORT", default=8765),
+                auto_open=_read_bool(mapping, "VOCALIVE_OVERLAY_AUTO_OPEN", default=True),
+                title=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_OVERLAY_TITLE",
+                    default="VocaLive Overlay",
+                ),
+                character_name=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_OVERLAY_CHARACTER_NAME",
+                    default="Tora",
+                ),
             ),
             reply=ReplySettings(
-                debounce_ms=_read_float("VOCALIVE_REPLY_DEBOUNCE_MS", default=1000.0),
-                policy_enabled=_read_bool("VOCALIVE_REPLY_POLICY_ENABLED", default=True),
-                min_gap_ms=_read_float("VOCALIVE_REPLY_MIN_GAP_MS", default=6000.0),
+                debounce_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_REPLY_DEBOUNCE_MS",
+                    default=1000.0,
+                ),
+                policy_enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_REPLY_POLICY_ENABLED",
+                    default=True,
+                ),
+                min_gap_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_REPLY_MIN_GAP_MS",
+                    default=6000.0,
+                ),
                 short_utterance_max_chars=_read_int(
+                    mapping,
                     "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
                     default=12,
                 ),
             ),
             gemini=GeminiSettings(
-                api_key=os.getenv("VOCALIVE_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY"),
-                model_name=os.getenv("VOCALIVE_GEMINI_MODEL", "gemini-2.5-flash"),
-                timeout_seconds=_read_float("VOCALIVE_GEMINI_TIMEOUT_SECONDS", default=30.0),
-                temperature=_read_optional_float("VOCALIVE_GEMINI_TEMPERATURE"),
+                api_key=(
+                    _read_optional_str_with_default(
+                        mapping,
+                        "VOCALIVE_GEMINI_API_KEY",
+                        default=None,
+                    )
+                    or _read_optional_str_with_default(
+                        mapping,
+                        "GEMINI_API_KEY",
+                        default=None,
+                    )
+                ),
+                model_name=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_GEMINI_MODEL",
+                    default="gemini-2.5-flash",
+                ),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_GEMINI_TIMEOUT_SECONDS",
+                    default=30.0,
+                ),
+                temperature=_read_optional_float(
+                    mapping,
+                    "VOCALIVE_GEMINI_TEMPERATURE",
+                ),
                 thinking_budget=_read_optional_int_with_default(
+                    mapping,
                     "VOCALIVE_GEMINI_THINKING_BUDGET",
                     default=0,
                 ),
                 system_instruction=_read_optional_str_with_default(
+                    mapping,
                     "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
                     default=DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
                 ),
             ),
             screen_capture=ScreenCaptureSettings(
-                enabled=_read_bool("VOCALIVE_SCREEN_CAPTURE_ENABLED", default=False),
+                enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_SCREEN_CAPTURE_ENABLED",
+                    default=False,
+                ),
                 window_name=_read_optional_str_with_default(
+                    mapping,
                     "VOCALIVE_SCREEN_WINDOW_NAME",
                     default=None,
                 ),
                 trigger_phrases=_read_str_tuple(
+                    mapping,
                     "VOCALIVE_SCREEN_TRIGGER_PHRASES",
                     default=DEFAULT_SCREEN_TRIGGER_PHRASES,
                 ),
-                timeout_seconds=_read_float("VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS", default=5.0),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
+                    default=5.0,
+                ),
                 resize_max_edge_px=_read_optional_int_with_default(
+                    mapping,
                     "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
                     default=1280,
                 ),
             ),
             moonshine=MoonshineSettings(
-                model_name=os.getenv("VOCALIVE_MOONSHINE_MODEL", "base"),
+                model_name=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_MOONSHINE_MODEL",
+                    default="base",
+                ),
             ),
             aivis=AivisSpeechSettings(
-                base_url=os.getenv("VOCALIVE_AIVIS_BASE_URL", "http://127.0.0.1:10101"),
-                speaker_id=_read_optional_int("VOCALIVE_AIVIS_SPEAKER_ID"),
-                speaker_name=os.getenv("VOCALIVE_AIVIS_SPEAKER_NAME"),
-                style_name=os.getenv("VOCALIVE_AIVIS_STYLE_NAME"),
-                timeout_seconds=_read_float("VOCALIVE_AIVIS_TIMEOUT_SECONDS", default=30.0),
+                base_url=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_AIVIS_BASE_URL",
+                    default="http://127.0.0.1:10101",
+                ),
+                speaker_id=_read_optional_int(mapping, "VOCALIVE_AIVIS_SPEAKER_ID"),
+                speaker_name=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_AIVIS_SPEAKER_NAME",
+                    default=None,
+                ),
+                style_name=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_AIVIS_STYLE_NAME",
+                    default=None,
+                ),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_AIVIS_TIMEOUT_SECONDS",
+                    default=30.0,
+                ),
             ),
         )
 
 
-def _read_int(name: str, default: int) -> int:
-    raw_value = os.getenv(name)
+def _lookup_raw(mapping: Mapping[str, str | None], name: str) -> str | None:
+    raw_value = mapping.get(name)
+    if raw_value is None:
+        return None
+    return str(raw_value)
+
+
+def _read_str_with_default(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: str,
+) -> str:
+    raw_value = _lookup_raw(mapping, name)
+    if raw_value is None:
+        return default
+    return raw_value
+
+
+def _read_int(mapping: Mapping[str, str | None], name: str, default: int) -> int:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     return int(raw_value)
 
 
-def _read_float(name: str, default: float) -> float:
-    raw_value = os.getenv(name)
+def _read_float(mapping: Mapping[str, str | None], name: str, default: float) -> float:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     return float(raw_value)
 
 
-def _read_optional_float(name: str) -> float | None:
-    raw_value = os.getenv(name)
+def _read_optional_float(
+    mapping: Mapping[str, str | None],
+    name: str,
+) -> float | None:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value in {None, ""}:
         return None
     return float(raw_value)
 
 
-def _read_optional_int(name: str) -> int | None:
-    raw_value = os.getenv(name)
+def _read_optional_int(
+    mapping: Mapping[str, str | None],
+    name: str,
+) -> int | None:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value in {None, ""}:
         return None
     return int(raw_value)
 
 
-def _read_optional_device(name: str) -> str | int | None:
-    raw_value = os.getenv(name)
+def _read_optional_device(
+    mapping: Mapping[str, str | None],
+    name: str,
+) -> str | int | None:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value in {None, ""}:
         return None
     normalized_value = raw_value.strip()
@@ -400,25 +1182,31 @@ def _read_optional_device(name: str) -> str | int | None:
     return normalized_value
 
 
-def _read_bool(name: str, default: bool) -> bool:
-    raw_value = os.getenv(name)
+def _read_bool(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: bool,
+) -> bool:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     normalized_value = raw_value.strip().lower()
-    truthy_values = {"1", "true", "yes", "on"}
-    falsy_values = {"0", "false", "no", "off"}
-    if normalized_value in truthy_values:
+    if normalized_value in _TRUTHY_VALUES:
         return True
-    if normalized_value in falsy_values:
+    if normalized_value in _FALSY_VALUES:
         return False
     raise ValueError(
         f"Environment variable {name} must be one of: "
-        f"{', '.join(sorted(truthy_values | falsy_values))}"
+        f"{', '.join(sorted(_TRUTHY_VALUES | _FALSY_VALUES))}"
     )
 
 
-def _read_optional_int_with_default(name: str, default: int | None) -> int | None:
-    raw_value = os.getenv(name)
+def _read_optional_int_with_default(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: int | None,
+) -> int | None:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     if raw_value == "":
@@ -426,8 +1214,12 @@ def _read_optional_int_with_default(name: str, default: int | None) -> int | Non
     return int(raw_value)
 
 
-def _read_optional_str_with_default(name: str, default: str | None) -> str | None:
-    raw_value = os.getenv(name)
+def _read_optional_str_with_default(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: str | None,
+) -> str | None:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     normalized_value = raw_value.strip()
@@ -436,18 +1228,23 @@ def _read_optional_str_with_default(name: str, default: str | None) -> str | Non
     return normalized_value
 
 
-def _read_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
-    raw_value = os.getenv(name)
+def _read_str_tuple(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: tuple[str, ...],
+) -> tuple[str, ...]:
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     return tuple(part.strip() for part in raw_value.split(",") if part.strip())
 
 
 def _read_application_audio_mode(
+    mapping: Mapping[str, str | None],
     name: str,
     default: ApplicationAudioMode,
 ) -> ApplicationAudioMode:
-    raw_value = os.getenv(name)
+    raw_value = _lookup_raw(mapping, name)
     if raw_value is None:
         return default
     normalized_value = "_".join(raw_value.strip().lower().replace("-", " ").split())
@@ -463,6 +1260,21 @@ def _read_application_audio_mode(
             f"Supported values: {supported_values}"
         )
     return mode
+
+
+def normalize_controller_values(
+    values: Mapping[str, str | None],
+    *,
+    include_defaults: bool = True,
+) -> dict[str, str | None]:
+    normalized: dict[str, str | None] = (
+        controller_default_values() if include_defaults else {}
+    )
+    for env_name, raw_value in values.items():
+        if env_name not in _CONTROLLER_SETTING_INDEX:
+            continue
+        normalized[env_name] = None if raw_value is None else str(raw_value)
+    return normalized
 
 
 def _normalize_provider_setting(kind: str, raw_value: str) -> str:

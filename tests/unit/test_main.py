@@ -6,7 +6,7 @@ import io
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
@@ -25,7 +25,14 @@ from vocalive.config.settings import (
     ScreenCaptureSettings,
 )
 from vocalive.llm.gemini import GeminiLanguageModel
-from vocalive.main import _run_microphone_loop, build_audio_input, build_orchestrator, build_overlay
+from vocalive.main import (
+    _run_microphone_loop,
+    build_audio_input,
+    build_orchestrator,
+    build_overlay,
+    load_headless_settings,
+    main,
+)
 from vocalive.models import AudioSegment
 from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.screen.windows import WindowsWindowScreenCapture
@@ -112,8 +119,8 @@ class BuildOrchestratorTests(unittest.TestCase):
             async def close(self) -> None:
                 return None
 
-        with patch("vocalive.main.sys.platform", "darwin"), patch(
-            "vocalive.main._application_audio_input_class_for_platform",
+        with patch("vocalive.runtime.sys.platform", "darwin"), patch(
+            "vocalive.runtime.application_audio_input_class_for_platform",
             return_value=_FakeApplicationAudioInput,
         ):
             audio_input = build_audio_input(
@@ -155,8 +162,8 @@ class BuildOrchestratorTests(unittest.TestCase):
             async def close(self) -> None:
                 return None
 
-        with patch("vocalive.main.sys.platform", "darwin"), patch(
-            "vocalive.main._application_audio_input_class_for_platform",
+        with patch("vocalive.runtime.sys.platform", "darwin"), patch(
+            "vocalive.runtime.application_audio_input_class_for_platform",
             return_value=_FakeApplicationAudioInput,
         ):
             build_audio_input(
@@ -173,7 +180,7 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertTrue(captured_kwargs[0]["speech_start_events_enabled"])
 
     def test_build_audio_input_supports_windows_application_audio(self) -> None:
-        with patch("vocalive.main.sys.platform", "win32"):
+        with patch("vocalive.runtime.sys.platform", "win32"):
             audio_input = build_audio_input(
                 AppSettings(
                     application_audio=ApplicationAudioSettings(
@@ -216,7 +223,7 @@ class BuildOrchestratorTests(unittest.TestCase):
             )
 
     def test_build_orchestrator_enables_screen_capture_for_gemini_on_macos(self) -> None:
-        with patch("vocalive.main.sys.platform", "darwin"):
+        with patch("vocalive.runtime.sys.platform", "darwin"):
             orchestrator = build_orchestrator(
                 AppSettings(
                     model_provider="gemini",
@@ -237,7 +244,7 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertEqual(orchestrator.screen_capture_engine.resize_max_edge_px, 960)
 
     def test_build_orchestrator_enables_screen_capture_for_gemini_on_windows(self) -> None:
-        with patch("vocalive.main.sys.platform", "win32"):
+        with patch("vocalive.runtime.sys.platform", "win32"):
             orchestrator = build_orchestrator(
                 AppSettings(
                     model_provider="gemini",
@@ -269,7 +276,7 @@ class BuildOrchestratorTests(unittest.TestCase):
             )
 
     def test_build_orchestrator_rejects_screen_capture_without_window_name(self) -> None:
-        with patch("vocalive.main.sys.platform", "darwin"):
+        with patch("vocalive.runtime.sys.platform", "darwin"):
             with self.assertRaisesRegex(
                 ValueError,
                 "screen capture input currently requires VOCALIVE_SCREEN_WINDOW_NAME",
@@ -282,7 +289,7 @@ class BuildOrchestratorTests(unittest.TestCase):
                 )
 
     def test_build_orchestrator_rejects_screen_capture_on_unsupported_platform(self) -> None:
-        with patch("vocalive.main.sys.platform", "linux"):
+        with patch("vocalive.runtime.sys.platform", "linux"):
             with self.assertRaisesRegex(
                 ValueError,
                 "screen capture input currently supports macOS and Windows only",
@@ -348,3 +355,49 @@ class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.submitted, ["first", "second"])
         self.assertEqual(orchestrator.wait_for_idle_calls, 0)
         self.assertIsNotNone(audio_input.speech_start_handler)
+
+
+class MainEntrypointTests(unittest.TestCase):
+    def test_load_headless_settings_merges_saved_values_with_env_overrides(self) -> None:
+        class _Store:
+            def load_values(self) -> dict[str, str | None]:
+                return {
+                    "VOCALIVE_INPUT_PROVIDER": "microphone",
+                    "VOCALIVE_MODEL_PROVIDER": "mock",
+                    "VOCALIVE_GEMINI_API_KEY": None,
+                }
+
+        settings = load_headless_settings(
+            store=_Store(),  # type: ignore[arg-type]
+            environ={
+                "VOCALIVE_MODEL_PROVIDER": "gemini",
+                "GEMINI_API_KEY": "secret",
+            },
+        )
+
+        self.assertEqual(settings.input.provider, InputProvider.MICROPHONE)
+        self.assertEqual(settings.model_provider, "gemini")
+        self.assertEqual(settings.gemini.api_key, "secret")
+
+    def test_main_defaults_to_controller_mode(self) -> None:
+        with patch("vocalive.main.run_controller", new=AsyncMock(return_value=0)) as controller_run, patch(
+            "vocalive.main.configure_logging"
+        ):
+            exit_code = main([])
+
+        self.assertEqual(exit_code, 0)
+        controller_run.assert_awaited_once()
+
+    def test_main_run_mode_uses_headless_runner(self) -> None:
+        settings = AppSettings(
+            input=InputSettings(provider=InputProvider.MICROPHONE),
+        )
+        with patch("vocalive.main.load_headless_settings", return_value=settings) as load_settings, patch(
+            "vocalive.main.run_headless",
+            new=AsyncMock(return_value=0),
+        ) as headless_run, patch("vocalive.main.configure_logging"):
+            exit_code = main(["run"])
+
+        self.assertEqual(exit_code, 0)
+        load_settings.assert_called_once_with()
+        headless_run.assert_awaited_once_with(settings)
