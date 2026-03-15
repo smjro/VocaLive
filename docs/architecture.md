@@ -140,7 +140,7 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 - user messages are appended after STT completes
 - application-audio transcripts are appended after STT completes as labeled `application` context messages, not user messages
 - in the default `context_only` mode, those application messages do not immediately trigger LLM/TTS; they are consumed on the next user-driven turn
-- the LLM receives a compacted session view: recent user/assistant raw messages, one bounded earlier-conversation summary, recent application-audio raw messages, one bounded earlier application-audio summary, a fixed participant-identity system instruction, and an optional conversation-language system instruction
+- the LLM receives a compacted session view: recent user/assistant raw messages, one bounded earlier-conversation summary, recent application-audio raw messages, one bounded earlier application-audio summary, a participant-identity system instruction that can include the configured user name, and an optional conversation-language system instruction
 - screen captures are request-scoped extras for the current user turn only and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
 - interrupted assistant replies are therefore not committed to session history

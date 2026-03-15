@@ -7,6 +7,7 @@ import sys
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import patch
 
 
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
@@ -18,6 +19,7 @@ from vocalive.config.settings import (
     AppSettings,
     ApplicationAudioMode,
     ApplicationAudioSettings,
+    ConversationSettings,
     ContextSettings,
     InputProvider,
     InputSettings,
@@ -429,9 +431,9 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 (
                     "system",
                     "Your name is コハク. "
-                    "The user's name is ましま. "
-                    "Understand that you are speaking directly with ましま, and use those names "
-                    "correctly whenever either name matters in the reply.",
+                    "You are speaking directly with the current user. "
+                    "Do not begin replies by addressing the user by name unless the user asks "
+                    "for that or the name is genuinely needed for clarity.",
                 ),
                 (
                     "system",
@@ -440,6 +442,40 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 ("user", "hello"),
             ],
+        )
+
+    async def test_configured_user_name_is_included_in_identity_instruction(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                conversation=ConversationSettings(user_name="ましま", language="ja"),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("hello"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            language_model.requests[0].messages[0].content,
+            "Your name is コハク. "
+            "The current user's name is ましま. "
+            "If the user asks what their name is or who you are speaking with, answer with that name. "
+            "Do not begin replies by addressing the user by name unless the user asks for that "
+            "or the name is genuinely needed for clarity.",
         )
 
     async def test_long_conversation_is_compacted_into_summary_plus_recent_window(self) -> None:
@@ -724,6 +760,138 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screen_capture_engine.calls, [])
         self.assertEqual(language_model.requests[0].current_user_parts, ())
 
+    async def test_passive_trigger_phrase_adds_screen_capture_parts(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="YouTube",
+                    passive_enabled=True,
+                    passive_trigger_phrases=("この画面",),
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=1_000.0):
+                accepted = await orchestrator.submit_utterance(AudioSegment.from_text("この画面どう見える？"))
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [1])
+        self.assertEqual(
+            language_model.requests[0].current_user_parts,
+            (
+                ConversationTextPart(
+                    text=(
+                        "Configured target window: YouTube. "
+                        "The attached image is a screenshot of that window for this turn because "
+                        "the user appears to be referring to the current screen."
+                    )
+                ),
+                ConversationInlineDataPart(mime_type="image/png", data=b"png-bytes"),
+            ),
+        )
+
+    async def test_passive_trigger_phrase_respects_cooldown(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    passive_enabled=True,
+                    passive_trigger_phrases=("この画面",),
+                    passive_cooldown_seconds=30.0,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=1_000.0):
+                accepted = await orchestrator.submit_utterance(AudioSegment.from_text("この画面どう？"))
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=5_000.0):
+                accepted = await orchestrator.submit_utterance(AudioSegment.from_text("この画面どう？"))
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [1])
+        self.assertEqual(language_model.requests[0].current_user_parts[1].data, b"png-bytes")
+        self.assertEqual(language_model.requests[1].current_user_parts, ())
+
+    async def test_passive_trigger_phrase_skips_unchanged_screenshot(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    passive_enabled=True,
+                    passive_trigger_phrases=("この画面",),
+                    passive_cooldown_seconds=1.0,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=1_000.0):
+                accepted = await orchestrator.submit_utterance(AudioSegment.from_text("この画面どう？"))
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=3_500.0):
+                accepted = await orchestrator.submit_utterance(AudioSegment.from_text("この画面どう？"))
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [1, 2])
+        self.assertEqual(language_model.requests[0].current_user_parts[1].data, b"png-bytes")
+        self.assertEqual(language_model.requests[1].current_user_parts, ())
+
     async def test_application_audio_is_committed_as_context_without_immediate_response(self) -> None:
         language_model = CapturingLanguageModel()
         orchestrator = ConversationOrchestrator(
@@ -808,9 +976,9 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 (
                     "system",
                     "Your name is コハク. "
-                    "The user's name is ましま. "
-                    "Understand that you are speaking directly with ましま, and use those names "
-                    "correctly whenever either name matters in the reply.",
+                    "You are speaking directly with the current user. "
+                    "Do not begin replies by addressing the user by name unless the user asks "
+                    "for that or the name is genuinely needed for clarity.",
                 ),
                 (
                     "system",

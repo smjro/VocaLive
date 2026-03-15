@@ -16,6 +16,7 @@ from vocalive.config.settings import (
     AppSettings,
     ApplicationAudioMode,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
+    DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES,
     DEFAULT_SCREEN_TRIGGER_PHRASES,
     MicrophoneInterruptMode,
     controller_setting_definitions,
@@ -78,7 +79,8 @@ class AppSettingsTests(unittest.TestCase):
         )
         assert settings.gemini.system_instruction is not None
         self.assertIn("your name is コハク", settings.gemini.system_instruction.lower())
-        self.assertIn("ましま", settings.gemini.system_instruction)
+        self.assertIn("Do not start replies by addressing the user by name", settings.gemini.system_instruction)
+        self.assertNotIn("ましま", settings.gemini.system_instruction)
         self.assertEqual(settings.conversation.language, "ja")
 
     def test_from_env_allows_overriding_gemini_thinking_budget(self) -> None:
@@ -147,6 +149,18 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertIsNone(settings.conversation.language)
 
+    def test_from_env_reads_optional_user_name(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_USER_NAME": "ましま",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.conversation.user_name, "ましま")
+
     def test_from_env_allows_disabling_default_gemini_system_instruction(self) -> None:
         with patch.dict(
             os.environ,
@@ -188,6 +202,9 @@ class AppSettingsTests(unittest.TestCase):
                 "VOCALIVE_SCREEN_CAPTURE_ENABLED": "true",
                 "VOCALIVE_SCREEN_WINDOW_NAME": "YouTube",
                 "VOCALIVE_SCREEN_TRIGGER_PHRASES": "画面見て, screen please",
+                "VOCALIVE_SCREEN_PASSIVE_ENABLED": "true",
+                "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES": "この画面, 見えてる",
+                "VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS": "22.5",
                 "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS": "7.5",
                 "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX": "960",
             },
@@ -201,6 +218,12 @@ class AppSettingsTests(unittest.TestCase):
             settings.screen_capture.trigger_phrases,
             ("画面見て", "screen please"),
         )
+        self.assertTrue(settings.screen_capture.passive_enabled)
+        self.assertEqual(
+            settings.screen_capture.passive_trigger_phrases,
+            ("この画面", "見えてる"),
+        )
+        self.assertEqual(settings.screen_capture.passive_cooldown_seconds, 22.5)
         self.assertEqual(settings.screen_capture.timeout_seconds, 7.5)
         self.assertEqual(settings.screen_capture.resize_max_edge_px, 960)
 
@@ -290,6 +313,12 @@ class AppSettingsTests(unittest.TestCase):
             settings.screen_capture.trigger_phrases,
             DEFAULT_SCREEN_TRIGGER_PHRASES,
         )
+        self.assertFalse(settings.screen_capture.passive_enabled)
+        self.assertEqual(
+            settings.screen_capture.passive_trigger_phrases,
+            DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES,
+        )
+        self.assertEqual(settings.screen_capture.passive_cooldown_seconds, 30.0)
         self.assertEqual(settings.context.recent_message_count, 8)
         self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
         self.assertEqual(settings.context.application_recent_message_count, 4)
@@ -340,6 +369,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_QUEUE_MAXSIZE",
             "VOCALIVE_QUEUE_OVERFLOW",
             "VOCALIVE_CONVERSATION_LANGUAGE",
+            "VOCALIVE_USER_NAME",
             "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
             "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
             "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
@@ -394,6 +424,9 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_SCREEN_CAPTURE_ENABLED",
             "VOCALIVE_SCREEN_WINDOW_NAME",
             "VOCALIVE_SCREEN_TRIGGER_PHRASES",
+            "VOCALIVE_SCREEN_PASSIVE_ENABLED",
+            "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES",
+            "VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS",
             "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
             "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
             "VOCALIVE_MOONSHINE_MODEL",
