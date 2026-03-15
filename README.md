@@ -25,6 +25,7 @@ The repository currently ships with:
 - Implemented: adaptive VAD and low-frequency-preserving STT-side speech enhancement for application audio
 - Implemented: mock STT, echo LLM, mock TTS, and in-memory playback for local development
 - Implemented: Moonshine STT via `moonshine-voice`
+- Implemented: OpenAI STT via the audio transcription API with `gpt-4o-mini-transcribe`
 - Implemented: Gemini `generateContent` integration over HTTPS
 - Implemented: trigger-based named-window screenshot capture for Gemini input on macOS and Windows
 - Implemented: AivisSpeech synthesis over the local HTTP API
@@ -95,25 +96,35 @@ export VOCALIVE_SCREEN_CAPTURE_ENABLED=true
 export VOCALIVE_SCREEN_WINDOW_NAME="Steam"
 export VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX=1280
 export VOCALIVE_AIVIS_BASE_URL=http://127.0.0.1:10101
+export VOCALIVE_AIVIS_ENGINE_MODE=gpu
 export VOCALIVE_GEMINI_API_KEY=...
 PYTHONPATH=src python3 -m vocalive run
 ```
 
 On Windows PowerShell, set the same variables with `$env:NAME = "value"` and run `python -m vocalive run`.
 
+To use OpenAI STT instead of Moonshine, switch `VOCALIVE_STT_PROVIDER=openai` and set
+`VOCALIVE_OPENAI_API_KEY` or `OPENAI_API_KEY`. The default OpenAI STT model is
+`gpt-4o-mini-transcribe`.
+
 If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved non-secret config, while secret fields must be re-entered.
+
+When AivisSpeech is installed locally, you can let VocaLive launch it directly by setting `VOCALIVE_AIVIS_ENGINE_MODE=cpu` or `gpu`. GPU mode starts the engine with `run(.exe) --use_gpu`. If your install lives outside the standard Windows/macOS path, set `VOCALIVE_AIVIS_ENGINE_PATH` to the engine `run(.exe)` path.
+If managed Aivis startup drives CPU usage too high, set `VOCALIVE_AIVIS_CPU_NUM_THREADS` to cap the engine worker threads.
 
 When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay is transparent, renders the character on the right, and shows assistant text only while the assistant is actively speaking. Each sentence-sized chunk is revealed progressively to match playback timing, then cleared when playback finishes or is interrupted.
 
 Current runtime constraints:
 
-- live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
+- live microphone or application-audio input currently requires a real STT adapter such as `moonshine` or `openai`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_AIVIS_ENGINE_MODE=cpu` or `gpu` starts the local AivisSpeech engine automatically; managed startup requires a bare local HTTP `VOCALIVE_AIVIS_BASE_URL` and either a standard install path or `VOCALIVE_AIVIS_ENGINE_PATH`
 - `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` currently requires `VOCALIVE_MODEL_PROVIDER=gemini`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe`
 - speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
 - the overlay is local-only and driven by sentence playback events; it is not token streaming from the LLM
 - Gemini accepts either `VOCALIVE_GEMINI_API_KEY` or `GEMINI_API_KEY`
+- OpenAI STT accepts either `VOCALIVE_OPENAI_API_KEY` or `OPENAI_API_KEY`
 - Gemini defaults to a surreal, deadpan conversation persona inspired by the vibe of Kamiusagi Rope; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
 
 Windows supports the full `stdin` / `microphone` / `application audio` / `screen capture` / overlay / speaker path. On Windows, application audio uses WASAPI process loopback scoped to the selected process tree while the selected process remains alive.
@@ -141,7 +152,8 @@ Application-audio notes:
 - application audio uses adaptive energy-based VAD by default so steady BGM is more likely to stay in the background; set `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false` to fall back to fixed thresholding
 - application-audio utterances go through STT like live user audio, but session history stores them as labeled application context such as `Application audio (Steam): ...`
 - default application-audio tuning keeps more preroll and trailing context so phrase starts and endings are less likely to clip; raise `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS`, `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS`, or `VOCALIVE_APP_AUDIO_SILENCE_MS` further if one app still cuts too aggressively
-- Moonshine applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization to application audio before STT by default; set `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false` to disable it
+- Moonshine applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization to application audio before STT by default; this is only used when `VOCALIVE_STT_PROVIDER=moonshine`, and `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false` disables it
+- if continuous app audio keeps Moonshine busy, set `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` to accept app utterances less often
 - in `respond` mode, application-audio speech start also interrupts stale assistant playback before the buffered utterance is fully emitted
 - app lookup and capture rely on a small platform helper that is built on first use; macOS uses ScreenCaptureKit via `swiftc`, and Windows uses a C# helper via `csc.exe`
 - on Windows, capture uses WASAPI process loopback for the selected process tree, so other audible apps or VocaLive speaker playback on the same output device are excluded; this requires a Windows build with process-loopback support
@@ -160,7 +172,7 @@ Screen-capture notes:
 - macOS uses a small Objective-C helper plus `screencapture`; Windows uses a C# helper that captures the target window with `PrintWindow` and a `BitBlt` fallback
 - if macOS screen recording permission is missing, the turn falls back to text-only input and logs `screen_capture_failed`
 
-The stdin shell is still available in `python -m vocalive run` when `VOCALIVE_INPUT_PROVIDER=stdin`. Typed input is stored as `AudioSegment.transcript_hint`, so a `moonshine` configuration can still run cleanly before you switch to live microphone mode. The first real Moonshine transcription downloads and caches the selected model files.
+The stdin shell is still available in `python -m vocalive run` when `VOCALIVE_INPUT_PROVIDER=stdin`. Typed input is stored as `AudioSegment.transcript_hint`, so real STT configurations such as `moonshine` and `openai` can still run cleanly before you switch to live microphone mode. The first real Moonshine transcription downloads and caches the selected model files.
 
 ## Development commands
 
@@ -188,7 +200,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | --- | --- | --- |
 | `VOCALIVE_SESSION_ID` | random UUID | Stable identifier for one conversation session |
 | `VOCALIVE_LOG_LEVEL` | `INFO` | Python logging level |
-| `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine` and aliases such as `moonshine voice` |
+| `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine`, `openai`, and aliases such as `moonshine voice` or `gpt-4o-mini-transcribe` |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
@@ -226,6 +238,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered application audio before end-of-turn detection may emit |
 | `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered application-audio utterance |
 | `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10.0` | Timeout for application lookup, helper startup, and helper build floor |
+| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` | `0.0` | Minimum delay between accepted application-audio utterances before STT runs again; increase this to reduce Moonshine CPU load on continuous media |
 | `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
 | `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
@@ -255,7 +268,15 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5.0` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
+| `VOCALIVE_OPENAI_API_KEY` | unset | OpenAI API key for STT; `OPENAI_API_KEY` is also accepted |
+| `VOCALIVE_OPENAI_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model name |
+| `VOCALIVE_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API base URL for audio transcription |
+| `VOCALIVE_OPENAI_TIMEOUT_SECONDS` | `30.0` | OpenAI audio transcription HTTP timeout |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | AivisSpeech engine base URL |
+| `VOCALIVE_AIVIS_ENGINE_MODE` | `external` | AivisSpeech engine startup mode: `external`, `cpu`, or `gpu` |
+| `VOCALIVE_AIVIS_ENGINE_PATH` | unset | Optional path to AivisSpeech Engine `run(.exe)` for managed CPU/GPU startup |
+| `VOCALIVE_AIVIS_CPU_NUM_THREADS` | unset | Optional managed-startup CPU thread limit passed to AivisSpeech Engine as `--cpu_num_threads`; lower values can reduce CPU load |
+| `VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS` | `60.0` | How long VocaLive waits for a managed AivisSpeech engine to become ready |
 | `VOCALIVE_AIVIS_SPEAKER_ID` | unset | Explicit AivisSpeech style ID |
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Speaker name to resolve via `/speakers` |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Style name to resolve via `/speakers` |
@@ -267,6 +288,7 @@ Current provider support:
 - `mock` model uses `EchoLanguageModel` and replies with `Assistant: <latest user message>`
 - `mock` TTS returns synthetic audio bytes for exercising the pipeline without a real engine
 - `moonshine` uses the optional `moonshine-voice` package for STT and applies low-frequency-preserving enhancement to application audio before transcription by default
+- `openai` uploads utterance WAV audio to the OpenAI audio transcription API and defaults to `gpt-4o-mini-transcribe`
 - `VOCALIVE_MOONSHINE_MODEL=base` resolves a language-specific Moonshine model from `VOCALIVE_CONVERSATION_LANGUAGE`, so the default Japanese configuration resolves to `base-ja`
 - `gemini` uses the Gemini `generateContent` API over HTTPS; the default config sets `thinkingBudget=0` to reduce latency
 - optional application-audio capture resolves one named running app, segments audio into utterances, and by default submits those transcripts as labeled application context without immediate assistant replies
@@ -274,11 +296,11 @@ Current provider support:
 - on macOS, application-audio capture uses ScreenCaptureKit to isolate the selected app; on Windows, application-audio capture uses WASAPI process loopback for the selected process tree while the selected process remains alive
 - optional screen capture resolves a named on-screen window on macOS or Windows and attaches one PNG of that window to the current Gemini turn when an explicit trigger phrase or an eligible passive screen-reference phrase matches
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
-- `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
+- `aivis` uses the local AivisSpeech engine API, resolves a style id from `/speakers` when needed, and can optionally launch the local engine in `cpu` or `gpu` mode before the runtime starts
 - `speaker` output plays synthesized audio through the configured external command or the platform default playback command
 - `overlay` is an optional local browser UI fed by orchestrator events and chunk-level playback timing
 - the overlay loads character art from `src/vocalive/ui/assets/character.png` when present, and otherwise falls back to the built-in vector character
-- provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
+- provider names are normalized case-insensitively, so values such as `Moonshine Voice`, `gpt-4o-mini-transcribe`, and `Aivis Speech` resolve to the supported adapters
 
 ## Repository layout
 

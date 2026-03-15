@@ -44,15 +44,16 @@ The current entry point is `src/vocalive/main.py`.
 - `python -m vocalive run` starts the runtime directly using the saved config plus current environment-variable overrides
 - `VOCALIVE_INPUT_PROVIDER=stdin` keeps the text shell, but only in explicit `run` mode
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
-- live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
+- live microphone or application-audio input currently requires a real STT adapter such as `moonshine` or `openai`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` layers application-audio capture on top of either `stdin` or `microphone`
 - `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; application-audio segments are transcribed and appended to session history without immediately triggering LLM/TTS
 - set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application audio to behave like a normal live turn and interrupt stale playback
 - application-audio turns are stored in session history as labeled application context, not as user messages
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
 - application-audio capture uses adaptive energy-based VAD by default and can fall back to fixed thresholding with `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false`
-- Moonshine applies low-frequency-preserving speech enhancement to application-audio segments before transcription unless `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false`
+- Moonshine applies low-frequency-preserving speech enhancement to application-audio segments before transcription unless `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false`; this path is only used when `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_AIVIS_ENGINE_MODE=cpu` or `gpu` makes VocaLive launch the local AivisSpeech engine automatically; GPU mode uses `run(.exe) --use_gpu`
 - `VOCALIVE_OVERLAY_ENABLED=true` starts a local transparent browser overlay that shows the character and assistant speech text
 - when `VOCALIVE_OVERLAY_AUTO_OPEN=true`, startup asks the system browser to open the overlay automatically
 - the overlay shows captions only while audio is actively playing and clears them on completion or interruption
@@ -69,7 +70,7 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_MIC_DEVICE=external` forces selection of a connected external mic, including Bluetooth hands-free inputs when they are the best match
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected higher-fidelity external mic over a built-in default input and skips Bluetooth hands-free / AG Audio inputs during auto-selection
 - the microphone path uses local RMS thresholding plus silence timing, not a production VAD
-- the stdin shell sets `AudioSegment.transcript_hint`, so `moonshine`-selected configs can still exercise Gemini and Aivis wiring before switching to live microphone capture
+- the stdin shell sets `AudioSegment.transcript_hint`, so real STT configs such as `moonshine` and `openai` can still exercise Gemini and Aivis wiring before switching to live microphone capture
 - when screen capture is enabled, explicit trigger phrases attach one screenshot of the configured window to the current Gemini turn only; optional passive screen-reference phrases can also attach one, but passive sends are rate-limited and unchanged screenshots are skipped
 
 Speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
@@ -123,7 +124,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10` | Timeout for app lookup and helper startup/build |
 | `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
 | `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
-| `VOCALIVE_STT_PROVIDER` | `mock` | `moonshine` is supported; aliases such as `moonshine voice` are accepted |
+| `VOCALIVE_STT_PROVIDER` | `mock` | `moonshine` and `openai` are supported; aliases such as `moonshine voice` and `gpt-4o-mini-transcribe` are accepted |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | `gemini` is supported; aliases such as `google gemini` are accepted |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` is supported; aliases such as `aivis speech` are accepted |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
@@ -159,7 +160,14 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
+| `VOCALIVE_OPENAI_API_KEY` | unset | Required for `openai`; `OPENAI_API_KEY` is also accepted |
+| `VOCALIVE_OPENAI_MODEL` | `gpt-4o-mini-transcribe` | Model name passed to the OpenAI audio transcription API |
+| `VOCALIVE_OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API base URL for audio transcription |
+| `VOCALIVE_OPENAI_TIMEOUT_SECONDS` | `30.0` | OpenAI audio transcription HTTP timeout |
 | `VOCALIVE_AIVIS_BASE_URL` | `http://127.0.0.1:10101` | Local AivisSpeech engine base URL |
+| `VOCALIVE_AIVIS_ENGINE_MODE` | `external` | AivisSpeech engine startup mode: `external`, `cpu`, or `gpu` |
+| `VOCALIVE_AIVIS_ENGINE_PATH` | unset | Optional path to the AivisSpeech Engine `run(.exe)` file for managed startup |
+| `VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS` | `60.0` | How long VocaLive waits for a managed AivisSpeech engine to become ready |
 | `VOCALIVE_AIVIS_SPEAKER_ID` | unset | Preferred explicit AivisSpeech style ID |
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Optional speaker name for `/speakers` lookup |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Optional style name for `/speakers` lookup |
@@ -177,13 +185,13 @@ Useful working combinations today:
 1. Default local shell
    `python -m vocalive run` with `stdin` + `mock` STT + `mock` model + `mock` TTS + `memory`
 2. Real remote/local providers without microphone
-   `python -m vocalive run` with `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
+   `python -m vocalive run` with `stdin` + `moonshine` or `openai` STT + `gemini` + `aivis` + `memory` or `speaker`
 3. Full live voice path
-   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
+   controller or `run` mode with `microphone` + `moonshine` or `openai` + `gemini` + `aivis` + `speaker`
 4. Live voice path with overlay
-   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
+   controller or `run` mode with `microphone` + `moonshine` or `openai` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
 5. Game/video commentary path
-   `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` + `gemini` + `aivis` + `memory` or `speaker`
+   `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` or `openai` + `gemini` + `aivis` + `memory` or `speaker`
    default app-audio behavior is `VOCALIVE_APP_AUDIO_MODE=context_only`; set `VOCALIVE_APP_AUDIO_MODE=respond` only when immediate replies to app dialogue are desired
 
 Screen capture can be layered on combinations 2 and 3 when:

@@ -7,6 +7,7 @@ from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudio
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
 from vocalive.config.settings import (
     AppSettings,
+    AivisEngineMode,
     ApplicationAudioMode,
     InputProvider,
     OutputProvider,
@@ -18,7 +19,9 @@ from vocalive.pipeline.events import ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
+from vocalive.stt.openai import OpenAITranscriptionSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
+from vocalive.tts.aivis_manager import ManagedAivisSpeechEngine
 from vocalive.tts.mock import MockTextToSpeechEngine
 from vocalive.ui.overlay import OverlayServer
 from vocalive.util.logging import get_logger, log_event
@@ -31,8 +34,11 @@ async def run_headless(settings: AppSettings) -> int:
     overlay = build_overlay(settings)
     orchestrator = build_orchestrator(settings, event_sink=overlay)
     audio_input = build_audio_input(settings)
+    managed_aivis_engine = build_managed_aivis_engine(settings)
 
     try:
+        if managed_aivis_engine is not None:
+            await managed_aivis_engine.start()
         if overlay is not None:
             await overlay.start()
             print(f"VocaLive overlay: {overlay.url}")
@@ -46,6 +52,8 @@ async def run_headless(settings: AppSettings) -> int:
         await orchestrator.stop()
         if overlay is not None:
             await overlay.stop()
+        if managed_aivis_engine is not None:
+            await managed_aivis_engine.close()
 
 
 def build_orchestrator(
@@ -55,7 +63,7 @@ def build_orchestrator(
     if _uses_live_audio_input(settings) and settings.stt_provider == "mock":
         raise ValueError(
             "microphone/application audio input requires a real STT adapter; "
-            "set VOCALIVE_STT_PROVIDER=moonshine"
+            "set VOCALIVE_STT_PROVIDER=moonshine or openai"
         )
     if settings.stt_provider == "moonshine":
         stt_engine = MoonshineSpeechToTextEngine(
@@ -64,6 +72,14 @@ def build_orchestrator(
             application_audio_enhancement_enabled=(
                 settings.application_audio.stt_enhancement_enabled
             ),
+        )
+    elif settings.stt_provider == "openai":
+        stt_engine = OpenAITranscriptionSpeechToTextEngine(
+            api_key=settings.openai.api_key,
+            model_name=settings.openai.model_name,
+            base_url=settings.openai.base_url,
+            timeout_seconds=settings.openai.timeout_seconds,
+            default_language=settings.conversation.language,
         )
     else:
         stt_engine = MockSpeechToTextEngine()
@@ -193,6 +209,14 @@ def build_overlay(settings: AppSettings) -> OverlayServer | None:
     if not settings.overlay.enabled:
         return None
     return OverlayServer(settings.overlay)
+
+
+def build_managed_aivis_engine(settings: AppSettings) -> ManagedAivisSpeechEngine | None:
+    if settings.tts_provider != "aivis":
+        return None
+    if settings.aivis.engine_mode is AivisEngineMode.EXTERNAL:
+        return None
+    return ManagedAivisSpeechEngine(settings.aivis)
 
 
 async def run_stdin_shell(orchestrator: ConversationOrchestrator) -> int:

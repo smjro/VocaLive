@@ -72,6 +72,18 @@ class _FakeOverlay:
         self.stopped = True
 
 
+class _FakeManagedAivisEngine:
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def close(self) -> None:
+        self.stopped = True
+
+
 class ControllerConfigStoreTests(unittest.TestCase):
     def test_save_omits_secret_values_from_disk(self) -> None:
         with TemporaryDirectory() as tempdir:
@@ -81,6 +93,7 @@ class ControllerConfigStoreTests(unittest.TestCase):
                 {
                     "VOCALIVE_INPUT_PROVIDER": "microphone",
                     "VOCALIVE_GEMINI_API_KEY": "secret",
+                    "VOCALIVE_OPENAI_API_KEY": "openai-secret",
                 }
             )
             loaded = store.load_values()
@@ -89,8 +102,11 @@ class ControllerConfigStoreTests(unittest.TestCase):
         self.assertEqual(saved["VOCALIVE_INPUT_PROVIDER"], "microphone")
         self.assertEqual(loaded["VOCALIVE_INPUT_PROVIDER"], "microphone")
         self.assertIsNone(saved["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(saved["VOCALIVE_OPENAI_API_KEY"])
         self.assertIsNone(loaded["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(loaded["VOCALIVE_OPENAI_API_KEY"])
         self.assertNotIn("VOCALIVE_GEMINI_API_KEY", payload["values"])
+        self.assertNotIn("VOCALIVE_OPENAI_API_KEY", payload["values"])
         self.assertEqual(loaded["VOCALIVE_MODEL_PROVIDER"], "mock")
 
     def test_load_scrubs_legacy_secret_values_from_disk(self) -> None:
@@ -126,8 +142,12 @@ class ControllerRuntimeManagerTests(unittest.TestCase):
         audio_input = _IdleAudioInput()
         orchestrator = _FakeOrchestrator()
         overlay = _FakeOverlay()
+        managed_aivis_engine = _FakeManagedAivisEngine()
 
         with patch("vocalive.ui.controller.build_audio_input", return_value=audio_input), patch(
+            "vocalive.ui.controller.build_managed_aivis_engine",
+            return_value=managed_aivis_engine,
+        ), patch(
             "vocalive.ui.controller.build_orchestrator",
             return_value=orchestrator,
         ), patch("vocalive.ui.controller.build_overlay", return_value=overlay), patch(
@@ -144,6 +164,8 @@ class ControllerRuntimeManagerTests(unittest.TestCase):
         self.assertTrue(orchestrator.stopped)
         self.assertTrue(overlay.started)
         self.assertTrue(overlay.stopped)
+        self.assertTrue(managed_aivis_engine.started)
+        self.assertTrue(managed_aivis_engine.stopped)
         self.assertIsNotNone(audio_input.speech_start_handler)
         manager.close()
 

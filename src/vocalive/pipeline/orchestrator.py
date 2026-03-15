@@ -104,6 +104,7 @@ class ConversationOrchestrator:
         self._active_context: TurnContext | None = None
         self._active_stage: str | None = None
         self._last_assistant_response_ms: float | None = None
+        self._last_application_audio_submission_ms: float | None = None
         self._last_screen_observation_ms: float | None = None
         self._last_screen_capture_fingerprint: str | None = None
 
@@ -126,11 +127,18 @@ class ConversationOrchestrator:
             pass
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
+        application_audio_submission_ms = self._begin_application_audio_submission(segment)
+        if segment.source == "application_audio" and application_audio_submission_ms is None:
+            return True
         if self._should_capture_application_audio_as_context(segment):
-            return await self.submit_application_context(segment)
-        if self._should_debounce_live_segment(segment):
-            return await self._submit_debounced_live_segment(segment)
-        return await self._queue_turn_segment(segment, reason="utterance_submitted")
+            accepted = await self.submit_application_context(segment)
+        elif self._should_debounce_live_segment(segment):
+            accepted = await self._submit_debounced_live_segment(segment)
+        else:
+            accepted = await self._queue_turn_segment(segment, reason="utterance_submitted")
+        if segment.source == "application_audio" and accepted and application_audio_submission_ms is not None:
+            self._last_application_audio_submission_ms = application_audio_submission_ms
+        return accepted
 
     async def _queue_turn_segment(self, segment: AudioSegment, *, reason: str) -> bool:
         self._idle_event.clear()
@@ -419,6 +427,29 @@ class ConversationOrchestrator:
             segment.source == "application_audio"
             and self.settings.application_audio.mode is ApplicationAudioMode.CONTEXT_ONLY
         )
+
+    def _begin_application_audio_submission(self, segment: AudioSegment) -> float | None:
+        if segment.source != "application_audio":
+            return None
+        cooldown_seconds = self.settings.application_audio.transcription_cooldown_seconds
+        if cooldown_seconds <= 0.0:
+            return monotonic_ms()
+        now_ms = monotonic_ms()
+        last_submission_ms = self._last_application_audio_submission_ms
+        if (
+            last_submission_ms is not None
+            and (now_ms - last_submission_ms) < (cooldown_seconds * 1000.0)
+        ):
+            log_event(
+                self.logger,
+                "application_audio_skipped",
+                session_id=self.session.session_id,
+                reason="cooldown",
+                cooldown_seconds=cooldown_seconds,
+                source_label=segment.source_label,
+            )
+            return None
+        return now_ms
 
     def _log_queue_overflow(self, queue_name: str, queue_size: int) -> None:
         log_event(

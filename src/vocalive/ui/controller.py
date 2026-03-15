@@ -21,7 +21,13 @@ from vocalive.config.settings import (
     normalize_controller_values,
 )
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
-from vocalive.runtime import build_audio_input, build_orchestrator, build_overlay
+from vocalive.runtime import (
+    build_audio_input,
+    build_managed_aivis_engine,
+    build_orchestrator,
+    build_overlay,
+)
+from vocalive.tts.aivis_manager import ManagedAivisSpeechEngine
 from vocalive.ui.overlay import OverlayServer
 from vocalive.util.logging import configure_logging
 
@@ -501,6 +507,7 @@ _PAGE_TEMPLATE = """
       gemini: "Gemini",
       screen_capture: "Screen Capture",
       moonshine: "Moonshine",
+      openai: "OpenAI",
       aivis: "Aivis",
     };
 
@@ -831,6 +838,7 @@ class _ActiveRuntime:
     settings: AppSettings
     orchestrator: ConversationOrchestrator
     audio_input: AudioInput
+    managed_aivis_engine: ManagedAivisSpeechEngine | None
     overlay: OverlayServer | None
     reader_task: asyncio.Task[None]
     input_label: str | None
@@ -927,10 +935,13 @@ class ControllerRuntimeManager:
             configure_logging(settings.log_level)
             self._set_state(status="starting", error=None, input_label=None, overlay_url=None)
 
+            managed_aivis_engine = build_managed_aivis_engine(settings)
             overlay: OverlayServer | None = None
             orchestrator: ConversationOrchestrator | None = None
             audio_input: AudioInput | None = None
             try:
+                if managed_aivis_engine is not None:
+                    await managed_aivis_engine.start()
                 overlay = build_overlay(settings)
                 orchestrator = build_orchestrator(settings, event_sink=overlay)
                 audio_input = build_audio_input(settings)
@@ -952,6 +963,7 @@ class ControllerRuntimeManager:
                     settings=settings,
                     orchestrator=orchestrator,
                     audio_input=audio_input,
+                    managed_aivis_engine=managed_aivis_engine,
                     overlay=overlay,
                     reader_task=reader_task,
                     input_label=input_label,
@@ -967,6 +979,7 @@ class ControllerRuntimeManager:
                 await self._cleanup_partial_runtime(
                     orchestrator=orchestrator,
                     audio_input=audio_input,
+                    managed_aivis_engine=managed_aivis_engine,
                     overlay=overlay,
                 )
                 self._set_state(
@@ -1055,6 +1068,7 @@ class ControllerRuntimeManager:
         *,
         orchestrator: ConversationOrchestrator | None,
         audio_input: AudioInput | None,
+        managed_aivis_engine: ManagedAivisSpeechEngine | None,
         overlay: OverlayServer | None,
     ) -> None:
         if audio_input is not None:
@@ -1066,6 +1080,9 @@ class ControllerRuntimeManager:
         if overlay is not None:
             with contextlib.suppress(Exception):
                 await overlay.stop()
+        if managed_aivis_engine is not None:
+            with contextlib.suppress(Exception):
+                await managed_aivis_engine.close()
 
     async def _stop_runtime_components(
         self,
@@ -1083,6 +1100,9 @@ class ControllerRuntimeManager:
         if runtime.overlay is not None:
             with contextlib.suppress(Exception):
                 await runtime.overlay.stop()
+        if runtime.managed_aivis_engine is not None:
+            with contextlib.suppress(Exception):
+                await runtime.managed_aivis_engine.close()
 
     def _set_state(
         self,

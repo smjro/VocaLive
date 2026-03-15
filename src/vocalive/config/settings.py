@@ -14,6 +14,10 @@ _PROVIDER_ALIASES = {
         "moonshine": "moonshine",
         "moonshine stt": "moonshine",
         "moonshine voice": "moonshine",
+        "openai": "openai",
+        "openai stt": "openai",
+        "openai transcription": "openai",
+        "gpt 4o mini transcribe": "openai",
     },
     "model": {
         "mock": "mock",
@@ -88,6 +92,12 @@ class ApplicationAudioMode(str, Enum):
     RESPOND = "respond"
 
 
+class AivisEngineMode(str, Enum):
+    EXTERNAL = "external"
+    CPU = "cpu"
+    GPU = "gpu"
+
+
 @dataclass(frozen=True)
 class SettingDefinition:
     env_name: str
@@ -124,7 +134,7 @@ CONTROLLER_SETTING_DEFINITIONS = (
         "providers",
         "enum",
         "mock",
-        options=("mock", "moonshine"),
+        options=("mock", "moonshine", "openai"),
     ),
     SettingDefinition(
         "VOCALIVE_MODEL_PROVIDER",
@@ -261,6 +271,12 @@ CONTROLLER_SETTING_DEFINITIONS = (
         "float",
         "10.0",
     ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+        "application_audio",
+        "float",
+        "0.0",
+    ),
     SettingDefinition("VOCALIVE_APP_AUDIO_ADAPTIVE_VAD", "application_audio", "bool", "true"),
     SettingDefinition(
         "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
@@ -363,7 +379,49 @@ CONTROLLER_SETTING_DEFINITIONS = (
         nullable=True,
     ),
     SettingDefinition("VOCALIVE_MOONSHINE_MODEL", "moonshine", "string", "base"),
+    SettingDefinition(
+        "VOCALIVE_OPENAI_API_KEY",
+        "openai",
+        "string",
+        None,
+        nullable=True,
+        secret=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_OPENAI_MODEL",
+        "openai",
+        "string",
+        "gpt-4o-mini-transcribe",
+    ),
+    SettingDefinition(
+        "VOCALIVE_OPENAI_BASE_URL",
+        "openai",
+        "string",
+        "https://api.openai.com/v1",
+    ),
+    SettingDefinition(
+        "VOCALIVE_OPENAI_TIMEOUT_SECONDS",
+        "openai",
+        "float",
+        "30.0",
+    ),
     SettingDefinition("VOCALIVE_AIVIS_BASE_URL", "aivis", "string", "http://127.0.0.1:10101"),
+    SettingDefinition(
+        "VOCALIVE_AIVIS_ENGINE_MODE",
+        "aivis",
+        "enum",
+        AivisEngineMode.EXTERNAL.value,
+        options=_enum_values(AivisEngineMode),
+    ),
+    SettingDefinition("VOCALIVE_AIVIS_ENGINE_PATH", "aivis", "string", None, nullable=True),
+    SettingDefinition(
+        "VOCALIVE_AIVIS_CPU_NUM_THREADS",
+        "aivis",
+        "int",
+        None,
+        nullable=True,
+    ),
+    SettingDefinition("VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS", "aivis", "float", "60.0"),
     SettingDefinition("VOCALIVE_AIVIS_SPEAKER_ID", "aivis", "int", None, nullable=True),
     SettingDefinition("VOCALIVE_AIVIS_SPEAKER_NAME", "aivis", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_AIVIS_STYLE_NAME", "aivis", "string", None, nullable=True),
@@ -472,6 +530,12 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS": SettingDocumentation(
         description="Timeout for application lookup, helper startup, and helper build floor"
     ),
+    "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS": SettingDocumentation(
+        description=(
+            "Minimum delay between accepted application-audio utterances before STT runs "
+            "again; increase this to reduce Moonshine CPU load on continuous media"
+        )
+    ),
     "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD": SettingDocumentation(
         description=(
             "Enables adaptive energy-based VAD for application audio; `false` falls back to "
@@ -482,7 +546,10 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
         description="Enables lightweight application-audio speech enhancement before Moonshine STT"
     ),
     "VOCALIVE_STT_PROVIDER": SettingDocumentation(
-        description="STT adapter; accepts `moonshine` and aliases such as `moonshine voice`"
+        description=(
+            "STT adapter; accepts `moonshine`, `openai`, and aliases such as "
+            "`moonshine voice` or `gpt-4o-mini-transcribe`"
+        )
     ),
     "VOCALIVE_MODEL_PROVIDER": SettingDocumentation(
         description="LLM adapter; accepts `gemini` and aliases such as `google gemini`"
@@ -618,7 +685,34 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_MOONSHINE_MODEL": SettingDocumentation(
         description="Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja`"
     ),
+    "VOCALIVE_OPENAI_API_KEY": SettingDocumentation(
+        description="OpenAI API key for STT; `OPENAI_API_KEY` is also accepted"
+    ),
+    "VOCALIVE_OPENAI_MODEL": SettingDocumentation(
+        description="OpenAI transcription model name"
+    ),
+    "VOCALIVE_OPENAI_BASE_URL": SettingDocumentation(
+        description="OpenAI API base URL for audio transcription"
+    ),
+    "VOCALIVE_OPENAI_TIMEOUT_SECONDS": SettingDocumentation(
+        description="OpenAI audio transcription HTTP timeout"
+    ),
     "VOCALIVE_AIVIS_BASE_URL": SettingDocumentation(description="AivisSpeech engine base URL"),
+    "VOCALIVE_AIVIS_ENGINE_MODE": SettingDocumentation(
+        description="AivisSpeech engine startup mode: `external`, `cpu`, or `gpu`"
+    ),
+    "VOCALIVE_AIVIS_ENGINE_PATH": SettingDocumentation(
+        description="Optional path to AivisSpeech Engine `run(.exe)` for managed CPU/GPU startup"
+    ),
+    "VOCALIVE_AIVIS_CPU_NUM_THREADS": SettingDocumentation(
+        description=(
+            "Optional managed-startup CPU thread limit passed to AivisSpeech Engine as "
+            "`--cpu_num_threads`; lower values can reduce CPU load"
+        )
+    ),
+    "VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS": SettingDocumentation(
+        description="How long VocaLive waits for a managed AivisSpeech engine to become ready"
+    ),
     "VOCALIVE_AIVIS_SPEAKER_ID": SettingDocumentation(
         description="Explicit AivisSpeech style ID"
     ),
@@ -743,6 +837,7 @@ class ApplicationAudioSettings:
     min_utterance_ms: float = 250.0
     max_utterance_ms: float = 15_000.0
     timeout_seconds: float = 10.0
+    transcription_cooldown_seconds: float = 0.0
     adaptive_vad_enabled: bool = True
     stt_enhancement_enabled: bool = True
 
@@ -814,8 +909,20 @@ class MoonshineSettings:
 
 
 @dataclass
+class OpenAISettings:
+    api_key: str | None = None
+    model_name: str = "gpt-4o-mini-transcribe"
+    base_url: str = "https://api.openai.com/v1"
+    timeout_seconds: float = 30.0
+
+
+@dataclass
 class AivisSpeechSettings:
     base_url: str = "http://127.0.0.1:10101"
+    engine_mode: AivisEngineMode = AivisEngineMode.EXTERNAL
+    engine_path: str | None = None
+    cpu_num_threads: int | None = None
+    startup_timeout_seconds: float = 60.0
     speaker_id: int | None = None
     speaker_name: str | None = None
     style_name: str | None = None
@@ -840,12 +947,21 @@ class AppSettings:
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
+    openai: OpenAISettings = field(default_factory=OpenAISettings)
     aivis: AivisSpeechSettings = field(default_factory=AivisSpeechSettings)
 
     def __post_init__(self) -> None:
         self.stt_provider = _normalize_provider_setting("stt", self.stt_provider)
         self.model_provider = _normalize_provider_setting("model", self.model_provider)
         self.tts_provider = _normalize_provider_setting("tts", self.tts_provider)
+        if self.application_audio.transcription_cooldown_seconds < 0:
+            raise ValueError(
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS must be >= 0"
+            )
+        if self.aivis.cpu_num_threads is not None and self.aivis.cpu_num_threads < 1:
+            raise ValueError(
+                "VOCALIVE_AIVIS_CPU_NUM_THREADS must be >= 1 when set"
+            )
 
     @classmethod
     def from_env(cls) -> "AppSettings":
@@ -1051,6 +1167,11 @@ class AppSettings:
                     "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
                     default=10.0,
                 ),
+                transcription_cooldown_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+                    default=0.0,
+                ),
                 adaptive_vad_enabled=_read_bool(
                     mapping,
                     "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
@@ -1205,11 +1326,62 @@ class AppSettings:
                     default="base",
                 ),
             ),
+            openai=OpenAISettings(
+                api_key=(
+                    _read_optional_str_with_default(
+                        mapping,
+                        "VOCALIVE_OPENAI_API_KEY",
+                        default=None,
+                    )
+                    or _read_optional_str_with_default(
+                        mapping,
+                        "OPENAI_API_KEY",
+                        default=None,
+                    )
+                ),
+                model_name=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_OPENAI_MODEL",
+                    default="gpt-4o-mini-transcribe",
+                ),
+                base_url=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_OPENAI_BASE_URL",
+                    default="https://api.openai.com/v1",
+                ),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_OPENAI_TIMEOUT_SECONDS",
+                    default=30.0,
+                ),
+            ),
             aivis=AivisSpeechSettings(
                 base_url=_read_str_with_default(
                     mapping,
                     "VOCALIVE_AIVIS_BASE_URL",
                     default="http://127.0.0.1:10101",
+                ),
+                engine_mode=AivisEngineMode(
+                    _read_str_with_default(
+                        mapping,
+                        "VOCALIVE_AIVIS_ENGINE_MODE",
+                        default=AivisEngineMode.EXTERNAL.value,
+                    ).strip().lower()
+                ),
+                engine_path=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_AIVIS_ENGINE_PATH",
+                    default=None,
+                ),
+                cpu_num_threads=_read_optional_int_with_default(
+                    mapping,
+                    "VOCALIVE_AIVIS_CPU_NUM_THREADS",
+                    default=None,
+                ),
+                startup_timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS",
+                    default=60.0,
                 ),
                 speaker_id=_read_optional_int(mapping, "VOCALIVE_AIVIS_SPEAKER_ID"),
                 speaker_name=_read_optional_str_with_default(

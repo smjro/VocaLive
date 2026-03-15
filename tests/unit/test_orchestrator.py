@@ -930,6 +930,59 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(language_model.requests, [])
 
+    async def test_application_audio_transcription_cooldown_skips_frequent_context_segments(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                application_audio=ApplicationAudioSettings(
+                    transcription_cooldown_seconds=2.0,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=1_000.0):
+                accepted = await orchestrator.submit_utterance(
+                    AudioSegment.from_text(
+                        "first clip",
+                        source="application_audio",
+                        source_label="Steam",
+                    )
+                )
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+
+            with patch("vocalive.pipeline.orchestrator.monotonic_ms", return_value=2_000.0):
+                accepted = await orchestrator.submit_utterance(
+                    AudioSegment.from_text(
+                        "second clip",
+                        source="application_audio",
+                        source_label="Steam",
+                    )
+                )
+                self.assertTrue(accepted)
+                await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("application", "Application audio (Steam): first clip"),
+            ],
+        )
+        self.assertEqual(language_model.requests, [])
+
     async def test_application_audio_can_still_trigger_response_in_respond_mode(self) -> None:
         language_model = CapturingLanguageModel()
         orchestrator = ConversationOrchestrator(

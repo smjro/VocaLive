@@ -9,6 +9,7 @@ from vocalive.config.controller_store import ControllerConfigStore
 from vocalive.config.settings import AppSettings, normalize_controller_values
 from vocalive.runtime import (
     build_audio_input,
+    build_managed_aivis_engine,
     build_orchestrator,
     build_overlay,
     run_headless,
@@ -39,6 +40,8 @@ def load_headless_settings(
     env_overrides = normalize_controller_values(current_environ, include_defaults=False)
     if "GEMINI_API_KEY" in current_environ:
         env_overrides["GEMINI_API_KEY"] = current_environ.get("GEMINI_API_KEY")
+    if "OPENAI_API_KEY" in current_environ:
+        env_overrides["OPENAI_API_KEY"] = current_environ.get("OPENAI_API_KEY")
     merged_values = dict(saved_values)
     merged_values.update(env_overrides)
     return AppSettings.from_mapping(merged_values)

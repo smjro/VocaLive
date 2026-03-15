@@ -26,6 +26,7 @@ Current default assembly:
 Current optional real adapters:
 
 - STT: `MoonshineSpeechToTextEngine`
+- STT: `OpenAITranscriptionSpeechToTextEngine`
 - LLM: `GeminiLanguageModel`
 - TTS: `AivisSpeechTextToSpeechEngine`
 - Output: `SpeakerAudioOutput`
@@ -38,7 +39,7 @@ Current optional presentation path:
 
 Current hard constraints in the shipped app assembly:
 
-- live microphone or application-audio input requires a real STT adapter, currently `moonshine`
+- live microphone or application-audio input requires a real STT adapter, currently `moonshine` or `openai`
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; macOS also requires Screen Recording permission, and Windows uses WASAPI process loopback for the selected process tree while the target process stays alive
 - Windows application-audio capture depends on `csc.exe` plus a Windows build with process-loopback support
 - screen capture currently supports macOS and Windows; macOS also requires Screen Recording permission

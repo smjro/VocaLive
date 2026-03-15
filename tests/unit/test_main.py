@@ -17,6 +17,8 @@ from vocalive.audio.input import MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput
 from vocalive.config.settings import (
     AppSettings,
+    AivisEngineMode,
+    AivisSpeechSettings,
     ApplicationAudioMode,
     ApplicationAudioSettings,
     InputProvider,
@@ -28,6 +30,7 @@ from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.main import (
     _run_microphone_loop,
     build_audio_input,
+    build_managed_aivis_engine,
     build_orchestrator,
     build_overlay,
     load_headless_settings,
@@ -37,7 +40,9 @@ from vocalive.models import AudioSegment
 from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.screen.windows import WindowsWindowScreenCapture
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
+from vocalive.stt.openai import OpenAITranscriptionSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
+from vocalive.tts.aivis_manager import ManagedAivisSpeechEngine
 from vocalive.ui.overlay import OverlayServer
 
 
@@ -98,6 +103,30 @@ class BuildOrchestratorTests(unittest.TestCase):
         )
 
         self.assertIsInstance(overlay, OverlayServer)
+
+    def test_build_managed_aivis_engine_returns_manager_for_gpu_mode(self) -> None:
+        manager = build_managed_aivis_engine(
+            AppSettings(
+                tts_provider="aivis",
+                aivis=AivisSpeechSettings(
+                    engine_mode=AivisEngineMode.GPU,
+                ),
+            )
+        )
+
+        self.assertIsInstance(manager, ManagedAivisSpeechEngine)
+
+    def test_build_managed_aivis_engine_skips_external_mode(self) -> None:
+        manager = build_managed_aivis_engine(
+            AppSettings(
+                tts_provider="aivis",
+                aivis=AivisSpeechSettings(
+                    engine_mode=AivisEngineMode.EXTERNAL,
+                ),
+            )
+        )
+
+        self.assertIsNone(manager)
 
     def test_build_audio_input_combines_microphone_and_application_audio(self) -> None:
         captured_kwargs: list[dict[str, object]] = []
@@ -207,6 +236,20 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertIsInstance(orchestrator.stt_engine, MoonshineSpeechToTextEngine)
         assert isinstance(orchestrator.stt_engine, MoonshineSpeechToTextEngine)
         self.assertFalse(orchestrator.stt_engine.application_audio_enhancement_enabled)
+
+    def test_build_orchestrator_uses_openai_stt_adapter(self) -> None:
+        orchestrator = build_orchestrator(
+            AppSettings(
+                stt_provider="gpt-4o-mini-transcribe",
+            )
+        )
+
+        self.assertIsInstance(
+            orchestrator.stt_engine,
+            OpenAITranscriptionSpeechToTextEngine,
+        )
+        assert isinstance(orchestrator.stt_engine, OpenAITranscriptionSpeechToTextEngine)
+        self.assertEqual(orchestrator.stt_engine.model_name, "gpt-4o-mini-transcribe")
 
     def test_build_orchestrator_rejects_application_audio_with_mock_stt(self) -> None:
         with self.assertRaisesRegex(
@@ -379,6 +422,24 @@ class MainEntrypointTests(unittest.TestCase):
         self.assertEqual(settings.input.provider, InputProvider.MICROPHONE)
         self.assertEqual(settings.model_provider, "gemini")
         self.assertEqual(settings.gemini.api_key, "secret")
+
+    def test_load_headless_settings_merges_openai_api_key_env_override(self) -> None:
+        class _Store:
+            def load_values(self) -> dict[str, str | None]:
+                return {
+                    "VOCALIVE_STT_PROVIDER": "openai",
+                    "VOCALIVE_OPENAI_API_KEY": None,
+                }
+
+        settings = load_headless_settings(
+            store=_Store(),  # type: ignore[arg-type]
+            environ={
+                "OPENAI_API_KEY": "secret",
+            },
+        )
+
+        self.assertEqual(settings.stt_provider, "openai")
+        self.assertEqual(settings.openai.api_key, "secret")
 
     def test_main_defaults_to_controller_mode(self) -> None:
         with patch("vocalive.main.run_controller", new=AsyncMock(return_value=0)) as controller_run, patch(

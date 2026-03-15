@@ -161,11 +161,13 @@ Default development assembly:
 Optional real adapters:
 
 - `MoonshineSpeechToTextEngine`
+- `OpenAITranscriptionSpeechToTextEngine`
 - `GeminiLanguageModel`
 - `MacOSWindowScreenCapture`
 - `WindowsWindowScreenCapture`
 - `AivisSpeechTextToSpeechEngine`
 - `SpeakerAudioOutput`
+- `ManagedAivisSpeechEngine`
 
 Optional presentation path:
 
@@ -184,14 +186,17 @@ Current compatibility constraints:
 - on macOS, application-audio capture depends on Screen Recording permission plus a first-run helper build
 - on Windows, application-audio capture depends on `csc.exe` plus a Windows build with WASAPI process-loopback support and isolates the selected process tree from other audible apps on the same device
 - speaker output is rejected unless TTS is `aivis`
+- when `VOCALIVE_AIVIS_ENGINE_MODE` is `cpu` or `gpu`, the runtime starts and later stops a local AivisSpeech engine process before the orchestrator begins using the HTTP API
 - screen capture is rejected unless the model provider is `gemini`
 - screen capture is rejected unless `VOCALIVE_SCREEN_WINDOW_NAME` is configured
 - screen capture currently supports macOS and Windows and resolves the first on-screen window that matches the configured title or owner name
 - speaker playback depends on an external playback command and defaults to `afplay` on macOS and PowerShell `SoundPlayer` on Windows
 
-The stdin shell still works with the real-provider assembly in explicit `python -m vocalive run` mode because `AudioSegment.from_text()` sets `transcript_hint`, and the Moonshine adapter short-circuits to that hint before touching the backend.
+The stdin shell still works with the real-provider assembly in explicit `python -m vocalive run` mode because `AudioSegment.from_text()` sets `transcript_hint`, and the current Moonshine and OpenAI STT adapters both short-circuit to that hint before touching a backend.
 
 When `segment.source == "application_audio"`, the current Moonshine adapter applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization before transcription. This is intentionally scoped to application audio so the microphone path stays unchanged.
+
+The OpenAI STT adapter uploads each utterance as WAV audio to `/audio/transcriptions` and defaults to `gpt-4o-mini-transcribe`.
 
 ## Observability
 

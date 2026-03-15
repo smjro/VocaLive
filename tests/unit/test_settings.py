@@ -14,6 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.config.settings import (
     AppSettings,
+    AivisEngineMode,
     ApplicationAudioMode,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
     DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES,
@@ -63,9 +64,83 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.model_provider, "gemini")
         self.assertEqual(settings.tts_provider, "aivis")
 
+    def test_from_env_normalizes_openai_stt_alias_and_api_key_fallback(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_STT_PROVIDER": "gpt-4o-mini-transcribe",
+                "OPENAI_API_KEY": "secret",
+                "VOCALIVE_OPENAI_BASE_URL": "https://example.test/v1",
+                "VOCALIVE_OPENAI_TIMEOUT_SECONDS": "12.5",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.stt_provider, "openai")
+        self.assertEqual(settings.openai.api_key, "secret")
+        self.assertEqual(settings.openai.model_name, "gpt-4o-mini-transcribe")
+        self.assertEqual(settings.openai.base_url, "https://example.test/v1")
+        self.assertEqual(settings.openai.timeout_seconds, 12.5)
+
     def test_from_env_rejects_unknown_provider_names(self) -> None:
         with patch.dict(os.environ, {"VOCALIVE_TTS_PROVIDER": "unsupported"}, clear=True):
             with self.assertRaisesRegex(ValueError, "Unsupported tts provider"):
+                AppSettings.from_env()
+
+    def test_from_env_reads_aivis_engine_startup_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_AIVIS_ENGINE_MODE": "gpu",
+                "VOCALIVE_AIVIS_ENGINE_PATH": r"C:\AivisSpeech\run.exe",
+                "VOCALIVE_AIVIS_CPU_NUM_THREADS": "4",
+                "VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS": "75.0",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.aivis.engine_mode, AivisEngineMode.GPU)
+        self.assertEqual(settings.aivis.engine_path, r"C:\AivisSpeech\run.exe")
+        self.assertEqual(settings.aivis.cpu_num_threads, 4)
+        self.assertEqual(settings.aivis.startup_timeout_seconds, 75.0)
+
+    def test_from_env_rejects_non_positive_aivis_cpu_thread_limit(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_AIVIS_CPU_NUM_THREADS": "0",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "VOCALIVE_AIVIS_CPU_NUM_THREADS"):
+                AppSettings.from_env()
+
+    def test_from_env_reads_application_audio_transcription_cooldown(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS": "2.5",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.application_audio.transcription_cooldown_seconds, 2.5)
+
+    def test_from_env_rejects_negative_application_audio_transcription_cooldown(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+            ):
                 AppSettings.from_env()
 
     def test_from_env_defaults_gemini_thinking_budget_to_zero(self) -> None:
@@ -401,6 +476,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS",
             "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS",
             "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
+            "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
             "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
             "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
             "VOCALIVE_OUTPUT_PROVIDER",
@@ -430,7 +506,15 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
             "VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX",
             "VOCALIVE_MOONSHINE_MODEL",
+            "VOCALIVE_OPENAI_API_KEY",
+            "VOCALIVE_OPENAI_MODEL",
+            "VOCALIVE_OPENAI_BASE_URL",
+            "VOCALIVE_OPENAI_TIMEOUT_SECONDS",
             "VOCALIVE_AIVIS_BASE_URL",
+            "VOCALIVE_AIVIS_ENGINE_MODE",
+            "VOCALIVE_AIVIS_ENGINE_PATH",
+            "VOCALIVE_AIVIS_CPU_NUM_THREADS",
+            "VOCALIVE_AIVIS_STARTUP_TIMEOUT_SECONDS",
             "VOCALIVE_AIVIS_SPEAKER_ID",
             "VOCALIVE_AIVIS_SPEAKER_NAME",
             "VOCALIVE_AIVIS_STYLE_NAME",
