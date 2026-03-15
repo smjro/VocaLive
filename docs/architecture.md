@@ -165,6 +165,7 @@ Optional real adapters:
 - `MacOSWindowScreenCapture`
 - `WindowsWindowScreenCapture`
 - `AivisSpeechTextToSpeechEngine`
+- `VoicevoxTextToSpeechEngine`
 - `SpeakerAudioOutput`
 
 Optional presentation path:
@@ -183,7 +184,7 @@ Current compatibility constraints:
 - application-audio input currently supports macOS and Windows
 - on macOS, application-audio capture depends on Screen Recording permission plus a first-run helper build
 - on Windows, application-audio capture depends on `csc.exe` plus a Windows build with WASAPI process-loopback support and isolates the selected process tree from other audible apps on the same device
-- speaker output is rejected unless TTS is `aivis`
+- speaker output is rejected unless TTS is `aivis` or `voicevox`
 - screen capture is rejected unless the model provider is `gemini`
 - screen capture is rejected unless `VOCALIVE_SCREEN_WINDOW_NAME` is configured
 - screen capture currently supports macOS and Windows and resolves the first on-screen window that matches the configured title or owner name

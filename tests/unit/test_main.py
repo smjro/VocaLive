@@ -22,6 +22,8 @@ from vocalive.config.settings import (
     InputProvider,
     InputSettings,
     OverlaySettings,
+    OutputProvider,
+    OutputSettings,
     ScreenCaptureSettings,
 )
 from vocalive.llm.gemini import GeminiLanguageModel
@@ -38,6 +40,7 @@ from vocalive.screen.macos import MacOSWindowScreenCapture
 from vocalive.screen.windows import WindowsWindowScreenCapture
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
+from vocalive.tts.voicevox import VoicevoxTextToSpeechEngine
 from vocalive.ui.overlay import OverlayServer
 
 
@@ -66,6 +69,23 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertEqual(orchestrator.language_model.thinking_budget, 0)
         self.assertIsInstance(orchestrator.tts_engine, AivisSpeechTextToSpeechEngine)
         self.assertIsInstance(orchestrator.audio_output, MemoryAudioOutput)
+
+    def test_build_orchestrator_supports_voicevox_tts_with_speaker_output(self) -> None:
+        orchestrator = build_orchestrator(
+            AppSettings(
+                tts_provider="VOICEVOX",
+                output=OutputSettings(
+                    provider=OutputProvider.SPEAKER,
+                    speaker_command="playback {path}",
+                ),
+            )
+        )
+
+        self.assertIsInstance(orchestrator.tts_engine, VoicevoxTextToSpeechEngine)
+        self.assertEqual(
+            orchestrator.audio_output.playback_command,
+            ("playback", "{path}"),
+        )
 
     def test_build_audio_input_propagates_device_preferences(self) -> None:
         audio_input = build_audio_input(

@@ -9,7 +9,7 @@ The repository currently ships with:
 - optional live microphone capture via `sounddevice`
 - optional application-audio capture for one named running app on macOS or Windows
 - mock providers for end-to-end local testing
-- Moonshine STT, Gemini LLM, and AivisSpeech TTS adapters
+- Moonshine STT, Gemini LLM, AivisSpeech TTS, and VOICEVOX TTS adapters
 - in-memory output for tests and speaker playback through an external command
 - queue-based orchestration with bounded backlog, stale-turn cancellation, and latency logging
 
@@ -27,7 +27,7 @@ The repository currently ships with:
 - Implemented: Moonshine STT via `moonshine-voice`
 - Implemented: Gemini `generateContent` integration over HTTPS
 - Implemented: trigger-based named-window screenshot capture for Gemini input on macOS and Windows
-- Implemented: AivisSpeech synthesis over the local HTTP API
+- Implemented: AivisSpeech and VOICEVOX synthesis over local HTTP APIs
 - Implemented: default speaker playback via `afplay` on macOS and PowerShell `SoundPlayer` on Windows
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
 - Implemented: optional transparent browser overlay with a character image, speech-only captions, and per-chunk text reveal timed to playback
@@ -79,7 +79,7 @@ Install the optional voice dependencies when you want live microphone capture or
 python3 -m pip install -e '.[voice]'
 ```
 
-Run the full local voice path against Moonshine, Gemini, AivisSpeech, and speaker playback in explicit headless mode:
+Run the full local voice path against Moonshine, Gemini, AivisSpeech or VOICEVOX, and speaker playback in explicit headless mode:
 
 ```bash
 export VOCALIVE_INPUT_PROVIDER=microphone
@@ -109,7 +109,7 @@ Current runtime constraints:
 
 - live microphone or application-audio input currently requires `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
-- `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis` or `voicevox`
 - `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` currently requires `VOCALIVE_MODEL_PROVIDER=gemini`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe`
 - speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows; on other platforms set `VOCALIVE_SPEAKER_COMMAND`
 - the overlay is local-only and driven by sentence playback events; it is not token streaming from the LLM
@@ -190,7 +190,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_LOG_LEVEL` | `INFO` | Python logging level |
 | `VOCALIVE_STT_PROVIDER` | `mock` | STT adapter; accepts `moonshine` and aliases such as `moonshine voice` |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
-| `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
+| `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis`, `voicevox`, and aliases such as `aivis speech` or `voice vox` |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_USER_NAME` | unset | Optional user name injected before the LLM call so the assistant can answer who it is speaking with without defaulting to name-based greetings |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
@@ -260,6 +260,11 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Speaker name to resolve via `/speakers` |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Style name to resolve via `/speakers` |
 | `VOCALIVE_AIVIS_TIMEOUT_SECONDS` | `30.0` | AivisSpeech API timeout |
+| `VOCALIVE_VOICEVOX_BASE_URL` | `http://127.0.0.1:50021` | VOICEVOX engine base URL |
+| `VOCALIVE_VOICEVOX_SPEAKER_ID` | unset | Explicit VOICEVOX style ID |
+| `VOCALIVE_VOICEVOX_SPEAKER_NAME` | unset | Speaker name to resolve via `/speakers` |
+| `VOCALIVE_VOICEVOX_STYLE_NAME` | unset | Style name to resolve via `/speakers` |
+| `VOCALIVE_VOICEVOX_TIMEOUT_SECONDS` | `30.0` | VOICEVOX API timeout |
 
 Current provider support:
 
@@ -275,10 +280,11 @@ Current provider support:
 - optional screen capture resolves a named on-screen window on macOS or Windows and attaches one PNG of that window to the current Gemini turn when an explicit trigger phrase or an eligible passive screen-reference phrase matches
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
+- `voicevox` uses the local VOICEVOX engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command or the platform default playback command
 - `overlay` is an optional local browser UI fed by orchestrator events and chunk-level playback timing
 - the overlay loads character art from `src/vocalive/ui/assets/character.png` when present, and otherwise falls back to the built-in vector character
-- provider names are normalized case-insensitively, so values such as `Moonshine Voice` and `Aivis Speech` resolve to the supported adapters
+- provider names are normalized case-insensitively, so values such as `Moonshine Voice`, `Aivis Speech`, and `Voice Vox` resolve to the supported adapters
 
 ## Repository layout
 

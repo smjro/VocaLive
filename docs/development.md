@@ -125,7 +125,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_STT_PROVIDER` | `mock` | `moonshine` is supported; aliases such as `moonshine voice` are accepted |
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | `gemini` is supported; aliases such as `google gemini` are accepted |
-| `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` is supported; aliases such as `aivis speech` are accepted |
+| `VOCALIVE_TTS_PROVIDER` | `mock` | `aivis` and `voicevox` are supported; aliases such as `aivis speech` and `voice vox` are accepted |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |
 | `VOCALIVE_OVERLAY_ENABLED` | `false` | Starts the local transparent browser overlay with speech-only captions |
 | `VOCALIVE_OVERLAY_HOST` | `127.0.0.1` | Bind host/interface for the overlay server |
@@ -164,6 +164,11 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_AIVIS_SPEAKER_NAME` | unset | Optional speaker name for `/speakers` lookup |
 | `VOCALIVE_AIVIS_STYLE_NAME` | unset | Optional style name for `/speakers` lookup |
 | `VOCALIVE_AIVIS_TIMEOUT_SECONDS` | `30` | AivisSpeech API timeout |
+| `VOCALIVE_VOICEVOX_BASE_URL` | `http://127.0.0.1:50021` | Local VOICEVOX engine base URL |
+| `VOCALIVE_VOICEVOX_SPEAKER_ID` | unset | Preferred explicit VOICEVOX style ID |
+| `VOCALIVE_VOICEVOX_SPEAKER_NAME` | unset | Optional speaker name for `/speakers` lookup |
+| `VOCALIVE_VOICEVOX_STYLE_NAME` | unset | Optional style name for `/speakers` lookup |
+| `VOCALIVE_VOICEVOX_TIMEOUT_SECONDS` | `30` | VOICEVOX API timeout |
 | `VOCALIVE_SPEAKER_COMMAND` | platform default | Override playback command; must include `{path}`. Defaults to `afplay {path}` on macOS and PowerShell `SoundPlayer` on Windows |
 | `VOCALIVE_QUEUE_MAXSIZE` | `4` | Bounded utterance backlog |
 | `VOCALIVE_QUEUE_OVERFLOW` | `drop_oldest` | `drop_oldest` or `reject_new` |
@@ -177,13 +182,13 @@ Useful working combinations today:
 1. Default local shell
    `python -m vocalive run` with `stdin` + `mock` STT + `mock` model + `mock` TTS + `memory`
 2. Real remote/local providers without microphone
-   `python -m vocalive run` with `stdin` + `moonshine` STT + `gemini` + `aivis` + `memory` or `speaker`
+   `python -m vocalive run` with `stdin` + `moonshine` STT + `gemini` + `aivis` or `voicevox` + `memory` or `speaker`
 3. Full live voice path
-   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker`
+   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` or `voicevox` + `speaker`
 4. Live voice path with overlay
-   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
+   controller or `run` mode with `microphone` + `moonshine` + `gemini` + `aivis` or `voicevox` + `speaker` + `VOCALIVE_OVERLAY_ENABLED=true`
 5. Game/video commentary path
-   `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` + `gemini` + `aivis` + `memory` or `speaker`
+   `microphone` or `stdin` + `VOCALIVE_APP_AUDIO_ENABLED=true` + `moonshine` + `gemini` + `aivis` or `voicevox` + `memory` or `speaker`
    default app-audio behavior is `VOCALIVE_APP_AUDIO_MODE=context_only`; set `VOCALIVE_APP_AUDIO_MODE=respond` only when immediate replies to app dialogue are desired
 
 Screen capture can be layered on combinations 2 and 3 when:
