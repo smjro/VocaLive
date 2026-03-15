@@ -21,6 +21,7 @@ from vocalive.config.settings import (
     ContextSettings,
     InputProvider,
     InputSettings,
+    MicrophoneInterruptMode,
     QueueSettings,
     QueueOverflowStrategy,
     ReplySettings,
@@ -233,6 +234,80 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ["first", "second", "Assistant: second"],
         )
 
+    async def test_user_speech_start_does_not_interrupt_in_explicit_microphone_mode(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        await orchestrator.handle_user_speech_start(source="user")
+        await asyncio.sleep(0.03)
+
+        self.assertEqual(output.stop_calls, 0)
+        self.assertEqual(output.interrupted_texts, [])
+
+    async def test_application_audio_speech_start_still_interrupts_in_explicit_microphone_mode(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                application_audio=ApplicationAudioSettings(
+                    enabled=True,
+                    mode=ApplicationAudioMode.RESPOND,
+                    target="YouTube",
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        await orchestrator.handle_user_speech_start(source="application_audio")
+        await self._wait_for(lambda: output.interrupted_texts == ["Assistant: first"])
+
+        self.assertEqual(output.stop_calls, 1)
+
     async def test_user_speech_start_does_not_cancel_screen_capture_stage(self) -> None:
         token = self.orchestrator._interruptions.begin_turn()
         self.orchestrator._active_context = TurnContext(
@@ -245,6 +320,83 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(token.is_cancelled())
         self.assertEqual(self.output.stop_calls, 0)
+
+    async def test_non_explicit_microphone_turn_does_not_interrupt_active_playback_in_explicit_mode(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        accepted = await orchestrator.submit_utterance(AudioSegment.from_text("そのまま行く"))
+        self.assertTrue(accepted)
+        await orchestrator.wait_for_idle()
+
+        self.assertEqual(output.stop_calls, 0)
+        self.assertIn("Assistant: first", output.completed_texts)
+        self.assertEqual(
+            [message.content for message in orchestrator.session.snapshot()],
+            ["first", "Assistant: first", "そのまま行く"],
+        )
+
+    async def test_explicit_microphone_turn_interrupts_active_playback_in_explicit_mode(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        accepted = await orchestrator.submit_utterance(AudioSegment.from_text("コハク、どうする？"))
+        self.assertTrue(accepted)
+        await orchestrator.wait_for_idle()
+
+        self.assertEqual(output.stop_calls, 1)
+        self.assertNotIn("Assistant: first", output.completed_texts)
+        self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
 
     async def test_conversation_language_instruction_is_included_for_llm(self) -> None:
         language_model = CapturingLanguageModel()

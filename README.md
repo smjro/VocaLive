@@ -17,7 +17,7 @@ The repository currently ships with:
 
 - Implemented: bounded queue orchestration with explicit overflow handling
 - Implemented: stale-turn interruption on new utterances
-- Implemented: microphone speech-start barge-in before turn-end emission
+- Implemented: configurable microphone barge-in modes including explicit assistant-address interruption
 - Implemented: local browser GUI controller with saved full-config editing, runtime start/stop, and explicit headless `run` mode
 - Implemented: stdin shell and microphone capture with preroll / hold / silence-based utterance detection
 - Implemented: automatic preference for higher-fidelity external microphones when the system default input is built-in, while avoiding Bluetooth hands-free inputs unless explicitly requested
@@ -128,7 +128,7 @@ Microphone tuning notes:
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
 - after one live utterance is emitted, VocaLive waits briefly before queueing the LLM turn so closely spaced microphone utterances can merge; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
 - microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
-- in microphone mode, local speech onset interrupts stale assistant playback before the next utterance is fully emitted
+- in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant, and `disabled` turns early microphone barge-in off
 
 Application-audio notes:
 
@@ -210,6 +210,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered utterance |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
 | `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
+| `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always` interrupts active assistant speech on new user speech, `explicit` waits for a finalized utterance that directly calls the assistant, and `disabled` never interrupts early |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
 | `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
 | `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |

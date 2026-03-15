@@ -14,7 +14,7 @@ from pathlib import Path
 from vocalive.audio.input import AudioInput, UtteranceAccumulator
 from vocalive.audio.speech_detection import AdaptiveEnergySpeechDetector
 from vocalive.audio.vad import FixedSilenceTurnDetector
-from vocalive.models import AudioSegment
+from vocalive.models import AudioSegment, AudioSource
 from vocalive.util.logging import get_logger, log_event
 
 
@@ -328,7 +328,7 @@ class MacOSApplicationAudioInput(AudioInput):
         self.timeout_seconds = timeout_seconds
         self.adaptive_vad_enabled = adaptive_vad_enabled
         self.speech_start_events_enabled = speech_start_events_enabled
-        self._on_speech_start: Callable[[], Awaitable[None] | None] | None = None
+        self._on_speech_start: Callable[[AudioSource], Awaitable[None] | None] | None = None
         self._background_tasks: set[asyncio.Future[object]] = set()
         self._accumulator = UtteranceAccumulator(
             sample_rate_hz=sample_rate_hz,
@@ -363,7 +363,7 @@ class MacOSApplicationAudioInput(AudioInput):
 
     def set_speech_start_handler(
         self,
-        handler: Callable[[], Awaitable[None] | None] | None,
+        handler: Callable[[AudioSource], Awaitable[None] | None] | None,
     ) -> None:
         if not self.speech_start_events_enabled:
             self._on_speech_start = None
@@ -595,11 +595,11 @@ class MacOSApplicationAudioInput(AudioInput):
         suffix = f": {detail}" if detail else ""
         raise RuntimeError(f"macOS application audio capture failed{suffix}")
 
-    def _emit_speech_start(self) -> None:
+    def _emit_speech_start(self, source: AudioSource) -> None:
         handler = self._on_speech_start
         if handler is None:
             return
-        result = handler()
+        result = handler(source)
         if not inspect.isawaitable(result):
             return
         task = asyncio.ensure_future(result)

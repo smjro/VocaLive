@@ -60,7 +60,7 @@ The current entry point is `src/vocalive/main.py`.
 - controller mode rejects `VOCALIVE_INPUT_PROVIDER=stdin`; use `python -m vocalive run` when you want the stdin shell
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
-- the microphone loop keeps reading while the assistant is speaking, so speech onset can stop stale playback immediately
+- the microphone loop keeps reading while the assistant is speaking; `VOCALIVE_MIC_INTERRUPT_MODE=always` stops stale playback on speech onset, while `explicit` waits for a finalized utterance that directly addresses the assistant
 - in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, so new app dialogue can stop stale playback immediately
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
@@ -100,6 +100,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_MIC_BLOCK_MS` | `40` | Duration of each captured PCM block |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
 | `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection skips Bluetooth hands-free inputs |
+| `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always`, `explicit`, or `disabled` |
 | `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
 | `VOCALIVE_MIC_PRE_SPEECH_MS` | `200` | Audio kept before speech starts so utterance onsets are not clipped |
 | `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200` | Keeps an utterance in the speech state briefly after the threshold drops |

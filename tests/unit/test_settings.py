@@ -17,6 +17,7 @@ from vocalive.config.settings import (
     ApplicationAudioMode,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
     DEFAULT_SCREEN_TRIGGER_PHRASES,
+    MicrophoneInterruptMode,
     controller_setting_definitions,
     controller_setting_rows,
     controller_setting_schema,
@@ -123,6 +124,7 @@ class AppSettingsTests(unittest.TestCase):
                 "VOCALIVE_MIC_PRE_SPEECH_MS": "180",
                 "VOCALIVE_MIC_SPEECH_HOLD_MS": "320",
                 "VOCALIVE_MIC_SILENCE_MS": "750",
+                "VOCALIVE_MIC_INTERRUPT_MODE": "explicit",
             },
             clear=True,
         ):
@@ -131,6 +133,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.input.pre_speech_ms, 180.0)
         self.assertEqual(settings.input.speech_hold_ms, 320.0)
         self.assertEqual(settings.input.silence_threshold_ms, 750.0)
+        self.assertEqual(settings.input.interrupt_mode, MicrophoneInterruptMode.EXPLICIT)
 
     def test_from_env_allows_disabling_default_conversation_language(self) -> None:
         with patch.dict(
@@ -296,6 +299,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(settings.reply.policy_enabled)
         self.assertEqual(settings.reply.min_gap_ms, 6000.0)
         self.assertEqual(settings.reply.short_utterance_max_chars, 12)
+        self.assertEqual(settings.input.interrupt_mode, MicrophoneInterruptMode.ALWAYS)
         self.assertFalse(settings.application_audio.enabled)
         self.assertEqual(
             settings.application_audio.mode,
@@ -315,6 +319,15 @@ class AppSettingsTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "Unsupported application audio mode"):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_unknown_microphone_interrupt_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_MIC_INTERRUPT_MODE": "unsupported"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported microphone interrupt mode"):
                 AppSettings.from_env()
 
     def test_controller_setting_definitions_cover_expected_env_names(self) -> None:
@@ -344,6 +357,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_MIC_MAX_UTTERANCE_MS",
             "VOCALIVE_MIC_DEVICE",
             "VOCALIVE_MIC_PREFER_EXTERNAL",
+            "VOCALIVE_MIC_INTERRUPT_MODE",
             "VOCALIVE_APP_AUDIO_ENABLED",
             "VOCALIVE_APP_AUDIO_MODE",
             "VOCALIVE_APP_AUDIO_TARGET",

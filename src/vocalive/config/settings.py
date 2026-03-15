@@ -65,6 +65,12 @@ class InputProvider(str, Enum):
     MICROPHONE = "microphone"
 
 
+class MicrophoneInterruptMode(str, Enum):
+    ALWAYS = "always"
+    EXPLICIT = "explicit"
+    DISABLED = "disabled"
+
+
 class OutputProvider(str, Enum):
     MEMORY = "memory"
     SPEAKER = "speaker"
@@ -185,6 +191,13 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_MIC_MAX_UTTERANCE_MS", "input", "float", "15000.0"),
     SettingDefinition("VOCALIVE_MIC_DEVICE", "input", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_MIC_PREFER_EXTERNAL", "input", "bool", "true"),
+    SettingDefinition(
+        "VOCALIVE_MIC_INTERRUPT_MODE",
+        "input",
+        "enum",
+        MicrophoneInterruptMode.ALWAYS.value,
+        options=_enum_values(MicrophoneInterruptMode),
+    ),
     SettingDefinition("VOCALIVE_APP_AUDIO_ENABLED", "application_audio", "bool", "false"),
     SettingDefinition(
         "VOCALIVE_APP_AUDIO_MODE",
@@ -355,6 +368,13 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
         description=(
             "Prefer a connected higher-fidelity external mic when the default input looks "
             "built-in; auto-selection avoids Bluetooth hands-free inputs"
+        )
+    ),
+    "VOCALIVE_MIC_INTERRUPT_MODE": SettingDocumentation(
+        description=(
+            "Microphone barge-in policy: `always` interrupts active assistant speech on new "
+            "user speech, `explicit` waits for a finalized utterance that directly calls the "
+            "assistant, and `disabled` never interrupts early"
         )
     ),
     "VOCALIVE_MIC_SPEECH_THRESHOLD": SettingDocumentation(
@@ -641,6 +661,7 @@ class InputSettings:
     max_utterance_ms: float = 15_000.0
     device: str | int | None = None
     prefer_external_device: bool = True
+    interrupt_mode: MicrophoneInterruptMode = MicrophoneInterruptMode.ALWAYS
 
 
 @dataclass
@@ -884,6 +905,11 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_MIC_PREFER_EXTERNAL",
                     default=True,
+                ),
+                interrupt_mode=_read_microphone_interrupt_mode(
+                    mapping,
+                    "VOCALIVE_MIC_INTERRUPT_MODE",
+                    default=MicrophoneInterruptMode.ALWAYS,
                 ),
             ),
             application_audio=ApplicationAudioSettings(
@@ -1257,6 +1283,32 @@ def _read_application_audio_mode(
         supported_values = ", ".join(mode.value for mode in ApplicationAudioMode)
         raise ValueError(
             f"Unsupported application audio mode: {raw_value!r}. "
+            f"Supported values: {supported_values}"
+        )
+    return mode
+
+
+def _read_microphone_interrupt_mode(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: MicrophoneInterruptMode,
+) -> MicrophoneInterruptMode:
+    raw_value = _lookup_raw(mapping, name)
+    if raw_value is None:
+        return default
+    normalized_value = "_".join(raw_value.strip().lower().replace("-", " ").split())
+    aliases = {
+        "always": MicrophoneInterruptMode.ALWAYS,
+        "explicit": MicrophoneInterruptMode.EXPLICIT,
+        "disabled": MicrophoneInterruptMode.DISABLED,
+        "never": MicrophoneInterruptMode.DISABLED,
+        "off": MicrophoneInterruptMode.DISABLED,
+    }
+    mode = aliases.get(normalized_value)
+    if mode is None:
+        supported_values = ", ".join(mode.value for mode in MicrophoneInterruptMode)
+        raise ValueError(
+            f"Unsupported microphone interrupt mode: {raw_value!r}. "
             f"Supported values: {supported_values}"
         )
     return mode

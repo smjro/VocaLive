@@ -53,7 +53,8 @@ class _FakeOrchestrator:
         self.submitted.append(segment)
         return True
 
-    async def handle_user_speech_start(self) -> None:
+    async def handle_user_speech_start(self, source="user") -> None:
+        del source
         return None
 
 

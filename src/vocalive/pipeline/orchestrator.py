@@ -7,11 +7,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from vocalive.audio.output import AudioOutput
-from vocalive.config.settings import AppSettings, ApplicationAudioMode, InputProvider
+from vocalive.config.settings import (
+    AppSettings,
+    ApplicationAudioMode,
+    InputProvider,
+    MicrophoneInterruptMode,
+)
 from vocalive.llm.base import LanguageModel
 from vocalive.models import (
     AssistantResponse,
     AudioSegment,
+    AudioSource,
     ConversationInlineDataPart,
     ConversationMessage,
     ConversationRequest,
@@ -28,7 +34,11 @@ from vocalive.pipeline.interruption import (
     TurnCancelledError,
 )
 from vocalive.pipeline.queues import BoundedAsyncQueue
-from vocalive.pipeline.reply_policy import ReplyDecision, decide_reply
+from vocalive.pipeline.reply_policy import (
+    ReplyDecision,
+    decide_reply,
+    looks_like_explicit_assistant_address,
+)
 from vocalive.pipeline.session import ConversationSession
 from vocalive.screen.base import ScreenCaptureEngine
 from vocalive.stt.base import SpeechToTextEngine
@@ -82,6 +92,7 @@ class ConversationOrchestrator:
         self._idle_event = asyncio.Event()
         self._work_available = asyncio.Event()
         self._pending_submission_lock = asyncio.Lock()
+        self._queue_submission_lock = asyncio.Lock()
         self._pending_live_segment: AudioSegment | None = None
         self._pending_live_segment_generation = 0
         self._pending_live_segment_task: asyncio.Task[None] | None = None
@@ -119,8 +130,11 @@ class ConversationOrchestrator:
 
     async def _queue_turn_segment(self, segment: AudioSegment, *, reason: str) -> bool:
         self._idle_event.clear()
-        await self._interrupt_active_turn(reason=reason)
-        accepted = await self._queue.put(segment)
+        async with self._queue_submission_lock:
+            queued_segment, should_interrupt = await self._prepare_segment_for_queue(segment)
+            if should_interrupt:
+                await self._interrupt_active_turn(reason=reason)
+            accepted = await self._queue.put(queued_segment)
         if not accepted:
             self._log_queue_overflow(queue_name="conversation", queue_size=self._queue.qsize())
             self._set_idle_if_drained()
@@ -209,8 +223,13 @@ class ConversationOrchestrator:
         self._work_available.set()
         return True
 
-    async def handle_user_speech_start(self) -> None:
+    async def handle_user_speech_start(self, source: AudioSource = "user") -> None:
         if self._active_stage not in {"tts", "playback"}:
+            return
+        if source == "application_audio":
+            await self._interrupt_active_turn(reason="speech_started")
+            return
+        if self.settings.input.interrupt_mode is not MicrophoneInterruptMode.ALWAYS:
             return
         await self._interrupt_active_turn(reason="speech_started")
 
@@ -636,6 +655,65 @@ class ConversationOrchestrator:
         )
         return _build_screen_capture_parts(screenshot, settings.window_name)
 
+    async def _prepare_segment_for_queue(
+        self,
+        segment: AudioSegment,
+    ) -> tuple[AudioSegment, bool]:
+        if not self._is_microphone_user_segment(segment):
+            return segment, True
+
+        interrupt_mode = self.settings.input.interrupt_mode
+        if interrupt_mode is MicrophoneInterruptMode.ALWAYS:
+            return segment, True
+        if interrupt_mode is MicrophoneInterruptMode.DISABLED:
+            return segment, False
+        if self._active_stage not in {"tts", "playback"}:
+            return segment, False
+
+        explicit_segment = await self._probe_explicit_microphone_segment(segment)
+        if explicit_segment is None:
+            return segment, False
+        return explicit_segment, True
+
+    async def _probe_explicit_microphone_segment(
+        self,
+        segment: AudioSegment,
+    ) -> AudioSegment | None:
+        transcription_text = (segment.transcript_hint or "").strip()
+        if not transcription_text:
+            probe_context = TurnContext(
+                session_id=self.session.session_id,
+                turn_id=self._turn_counter + 1,
+            )
+            try:
+                transcription = await self.stt_engine.transcribe(segment, probe_context)
+            except Exception as exc:
+                log_event(
+                    self.logger,
+                    "microphone_interrupt_probe_failed",
+                    session_id=self.session.session_id,
+                    stage=self._active_stage,
+                    error=str(exc),
+                )
+                return None
+            transcription_text = transcription.text.strip()
+            if not transcription_text:
+                return None
+            segment = _with_transcript_hint(segment, transcription_text)
+
+        if not looks_like_explicit_assistant_address(
+            transcription_text,
+            assistant_names=_assistant_names_for_interrupt(self.settings),
+        ):
+            return None
+        return segment
+
+    def _is_microphone_user_segment(self, segment: AudioSegment) -> bool:
+        return (
+            self.settings.input.provider is InputProvider.MICROPHONE
+            and segment.source == "user"
+        )
+
 
 def _build_participant_identity_instruction() -> str:
     return (
@@ -718,6 +796,17 @@ def _normalize_screen_trigger_text(value: str) -> str:
     return "".join(value.lower().split())
 
 
+def _assistant_names_for_interrupt(settings: AppSettings) -> tuple[str, ...]:
+    normalized_names: list[str] = []
+    for candidate in (settings.overlay.character_name, "コハク"):
+        if candidate is None:
+            continue
+        normalized = candidate.strip()
+        if normalized and normalized not in normalized_names:
+            normalized_names.append(normalized)
+    return tuple(normalized_names)
+
+
 def _estimate_playback_duration_ms(speech: SynthesizedSpeech) -> float | None:
     if speech.duration_ms is not None and speech.duration_ms > 0:
         return speech.duration_ms
@@ -784,6 +873,18 @@ def _merge_segments(first: AudioSegment, second: AudioSegment) -> AudioSegment:
         transcript_hint=_merge_transcript_hints(first.transcript_hint, second.transcript_hint),
         source=first.source,
         source_label=first.source_label,
+    )
+
+
+def _with_transcript_hint(segment: AudioSegment, transcript_hint: str) -> AudioSegment:
+    return AudioSegment(
+        pcm=segment.pcm,
+        sample_rate_hz=segment.sample_rate_hz,
+        channels=segment.channels,
+        sample_width_bytes=segment.sample_width_bytes,
+        transcript_hint=transcript_hint,
+        source=segment.source,
+        source_label=segment.source_label,
     )
 
 

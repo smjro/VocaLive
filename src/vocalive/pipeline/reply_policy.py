@@ -34,6 +34,10 @@ _GREETING_MARKERS = {
     "hi",
     "hey",
 }
+_ASSISTANT_INVOCATION_MARKERS = {
+    "assistant",
+    "アシスタント",
+}
 _SHORT_REACTION_MARKERS = {
     "あ",
     "あっ",
@@ -97,6 +101,21 @@ def decide_reply(
         return ReplyDecision(should_reply=False, reason="cooldown")
 
     return ReplyDecision(should_reply=True, reason="default")
+
+
+def looks_like_explicit_assistant_address(
+    text: str,
+    *,
+    assistant_names: tuple[str, ...] = (),
+) -> bool:
+    normalized_text = "".join(text.lower().split())
+    if not normalized_text:
+        return False
+    for assistant_name in assistant_names:
+        normalized_name = "".join(assistant_name.lower().split())
+        if normalized_name and normalized_name in normalized_text:
+            return True
+    return any(marker in normalized_text for marker in _ASSISTANT_INVOCATION_MARKERS)
 
 
 def _looks_like_explicit_request(normalized_text: str) -> bool:

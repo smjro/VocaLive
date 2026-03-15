@@ -104,17 +104,17 @@ class UtteranceAccumulatorTests(unittest.TestCase):
             speech_hold_ms=0.0,
             min_utterance_ms=100.0,
             turn_detector=FixedSilenceTurnDetector(silence_threshold_ms=100.0),
-            on_speech_start=lambda: started.append("speech"),
+            on_speech_start=lambda source: started.append(source),
         )
 
         self.assertIsNone(accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=2_000)))
-        self.assertEqual(started, ["speech"])
+        self.assertEqual(started, ["user"])
         self.assertIsNone(accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=2_000)))
-        self.assertEqual(started, ["speech"])
+        self.assertEqual(started, ["user"])
         segment = accumulator.add_chunk(_pcm_chunk(frame_count=100, amplitude=0))
 
         self.assertIsNotNone(segment)
-        self.assertEqual(started, ["speech"])
+        self.assertEqual(started, ["user"])
 
     def test_emits_after_detected_silence(self) -> None:
         accumulator = UtteranceAccumulator(

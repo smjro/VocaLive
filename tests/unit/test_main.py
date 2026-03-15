@@ -330,7 +330,8 @@ class _RecordingOrchestrator:
         self.submitted.append(segment.transcript_hint)
         return True
 
-    async def handle_user_speech_start(self) -> None:
+    async def handle_user_speech_start(self, source="user") -> None:
+        del source
         return None
 
     async def wait_for_idle(self) -> None:

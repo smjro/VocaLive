@@ -12,7 +12,7 @@ from typing import Any
 from vocalive.audio.devices import InputDeviceMatch, resolve_input_device
 from vocalive.audio.speech_detection import FixedThresholdSpeechDetector, SpeechDetector
 from vocalive.audio.vad import FixedSilenceTurnDetector, TurnDetector
-from vocalive.models import AudioSegment
+from vocalive.models import AudioSegment, AudioSource
 from vocalive.util.logging import get_logger, log_event
 
 
@@ -26,7 +26,7 @@ class AudioInput(ABC):
 
     def set_speech_start_handler(
         self,
-        handler: Callable[[], Awaitable[None] | None] | None,
+        handler: Callable[[AudioSource], Awaitable[None] | None] | None,
     ) -> None:
         del handler
 
@@ -80,7 +80,7 @@ class CombinedAudioInput(AudioInput):
 
     def set_speech_start_handler(
         self,
-        handler: Callable[[], Awaitable[None] | None] | None,
+        handler: Callable[[AudioSource], Awaitable[None] | None] | None,
     ) -> None:
         for audio_input in self.inputs:
             audio_input.set_speech_start_handler(handler)
@@ -147,11 +147,11 @@ class UtteranceAccumulator:
         speech_hold_ms: float = 200.0,
         min_utterance_ms: float = 250.0,
         max_utterance_ms: float = 15_000.0,
-        segment_source: str = "user",
+        segment_source: AudioSource = "user",
         segment_source_label: str | None = None,
         turn_detector: TurnDetector | None = None,
         speech_detector: SpeechDetector | None = None,
-        on_speech_start: Callable[[], None] | None = None,
+        on_speech_start: Callable[[AudioSource], None] | None = None,
     ) -> None:
         self.sample_rate_hz = sample_rate_hz
         self.channels = channels
@@ -193,7 +193,7 @@ class UtteranceAccumulator:
             if measured_speech:
                 self._start_buffer_from_preroll()
                 if self.on_speech_start is not None:
-                    self.on_speech_start()
+                    self.on_speech_start(self.segment_source)
             else:
                 self._buffer_preroll_chunk(chunk, duration_ms)
                 return None
@@ -290,7 +290,7 @@ class MicrophoneAudioInput(AudioInput):
         self.frames_per_block = max(1, int(sample_rate_hz * block_duration_ms / 1000.0))
         self.device = device
         self.prefer_external_device = prefer_external_device
-        self._on_speech_start: Callable[[], Awaitable[None] | None] | None = None
+        self._on_speech_start: Callable[[AudioSource], Awaitable[None] | None] | None = None
         self._background_tasks: set[asyncio.Future[Any]] = set()
         self._accumulator = UtteranceAccumulator(
             sample_rate_hz=sample_rate_hz,
@@ -346,7 +346,7 @@ class MicrophoneAudioInput(AudioInput):
 
     def set_speech_start_handler(
         self,
-        handler: Callable[[], Awaitable[None] | None] | None,
+        handler: Callable[[AudioSource], Awaitable[None] | None] | None,
     ) -> None:
         self._on_speech_start = handler
 
@@ -433,11 +433,11 @@ class MicrophoneAudioInput(AudioInput):
             return
         await asyncio.gather(*tuple(self._background_tasks), return_exceptions=True)
 
-    def _emit_speech_start(self) -> None:
+    def _emit_speech_start(self, source: AudioSource) -> None:
         handler = self._on_speech_start
         if handler is None:
             return
-        result = handler()
+        result = handler(source)
         if not inspect.isawaitable(result):
             return
         task = asyncio.ensure_future(result)

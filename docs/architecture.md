@@ -125,7 +125,7 @@ The pipeline is built around a bounded user-turn queue plus a low-priority appli
 - overflow policy is explicit: `drop_oldest` or `reject_new`
 - `submit_utterance()` interrupts the currently active turn before queue insertion
 - application audio in `context_only` mode is routed into the low-priority queue and does not interrupt active playback or trigger LLM/TTS
-- microphone speech onset calls `handle_user_speech_start()` so stale playback can stop before the next utterance is fully emitted
+- microphone speech onset calls `handle_user_speech_start()` only when the configured mic interrupt mode still allows immediate barge-in
 - application-audio speech onset calls `handle_user_speech_start()` only in `respond` mode
 - playback backends receive a `CancellationToken` and must stop quickly when a turn is cancelled
 - `drop_oldest` keeps the newest utterance by discarding the oldest queued item
