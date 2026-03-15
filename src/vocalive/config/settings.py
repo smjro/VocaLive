@@ -29,6 +29,9 @@ _PROVIDER_ALIASES = {
         "aivisspeech": "aivis",
         "aivis speech": "aivis",
         "aivis tts": "aivis",
+        "voicevox": "voicevox",
+        "voice vox": "voicevox",
+        "voicevox tts": "voicevox",
     },
 }
 
@@ -138,7 +141,7 @@ CONTROLLER_SETTING_DEFINITIONS = (
         "providers",
         "enum",
         "mock",
-        options=("mock", "aivis"),
+        options=("mock", "aivis", "voicevox"),
     ),
     SettingDefinition("VOCALIVE_QUEUE_MAXSIZE", "queue", "int", "4"),
     SettingDefinition(
@@ -368,6 +371,16 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_AIVIS_SPEAKER_NAME", "aivis", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_AIVIS_STYLE_NAME", "aivis", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_AIVIS_TIMEOUT_SECONDS", "aivis", "float", "30.0"),
+    SettingDefinition(
+        "VOCALIVE_VOICEVOX_BASE_URL",
+        "voicevox",
+        "string",
+        "http://127.0.0.1:50021",
+    ),
+    SettingDefinition("VOCALIVE_VOICEVOX_SPEAKER_ID", "voicevox", "int", None, nullable=True),
+    SettingDefinition("VOCALIVE_VOICEVOX_SPEAKER_NAME", "voicevox", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_VOICEVOX_STYLE_NAME", "voicevox", "string", None, nullable=True),
+    SettingDefinition("VOCALIVE_VOICEVOX_TIMEOUT_SECONDS", "voicevox", "float", "30.0"),
 )
 
 _CONTROLLER_SETTING_INDEX = {
@@ -488,7 +501,10 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
         description="LLM adapter; accepts `gemini` and aliases such as `google gemini`"
     ),
     "VOCALIVE_TTS_PROVIDER": SettingDocumentation(
-        description="TTS adapter; accepts `aivis` and aliases such as `aivis speech`"
+        description=(
+            "TTS adapter; accepts `aivis`, `voicevox`, and aliases such as "
+            "`aivis speech` or `voice vox`"
+        )
     ),
     "VOCALIVE_OUTPUT_PROVIDER": SettingDocumentation(description="`memory` or `speaker`"),
     "VOCALIVE_OVERLAY_ENABLED": SettingDocumentation(
@@ -630,6 +646,19 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     ),
     "VOCALIVE_AIVIS_TIMEOUT_SECONDS": SettingDocumentation(
         description="AivisSpeech API timeout"
+    ),
+    "VOCALIVE_VOICEVOX_BASE_URL": SettingDocumentation(description="VOICEVOX engine base URL"),
+    "VOCALIVE_VOICEVOX_SPEAKER_ID": SettingDocumentation(
+        description="Explicit VOICEVOX style ID"
+    ),
+    "VOCALIVE_VOICEVOX_SPEAKER_NAME": SettingDocumentation(
+        description="Speaker name to resolve via `/speakers`"
+    ),
+    "VOCALIVE_VOICEVOX_STYLE_NAME": SettingDocumentation(
+        description="Style name to resolve via `/speakers`"
+    ),
+    "VOCALIVE_VOICEVOX_TIMEOUT_SECONDS": SettingDocumentation(
+        description="VOICEVOX API timeout"
     ),
     "VOCALIVE_SPEAKER_COMMAND": SettingDocumentation(
         description=(
@@ -823,6 +852,15 @@ class AivisSpeechSettings:
 
 
 @dataclass
+class VoicevoxSettings:
+    base_url: str = "http://127.0.0.1:50021"
+    speaker_id: int | None = None
+    speaker_name: str | None = None
+    style_name: str | None = None
+    timeout_seconds: float = 30.0
+
+
+@dataclass
 class AppSettings:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     log_level: str = "INFO"
@@ -841,6 +879,7 @@ class AppSettings:
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
     aivis: AivisSpeechSettings = field(default_factory=AivisSpeechSettings)
+    voicevox: VoicevoxSettings = field(default_factory=VoicevoxSettings)
 
     def __post_init__(self) -> None:
         self.stt_provider = _normalize_provider_setting("stt", self.stt_provider)
@@ -1225,6 +1264,29 @@ class AppSettings:
                 timeout_seconds=_read_float(
                     mapping,
                     "VOCALIVE_AIVIS_TIMEOUT_SECONDS",
+                    default=30.0,
+                ),
+            ),
+            voicevox=VoicevoxSettings(
+                base_url=_read_str_with_default(
+                    mapping,
+                    "VOCALIVE_VOICEVOX_BASE_URL",
+                    default="http://127.0.0.1:50021",
+                ),
+                speaker_id=_read_optional_int(mapping, "VOCALIVE_VOICEVOX_SPEAKER_ID"),
+                speaker_name=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_VOICEVOX_SPEAKER_NAME",
+                    default=None,
+                ),
+                style_name=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_VOICEVOX_STYLE_NAME",
+                    default=None,
+                ),
+                timeout_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_VOICEVOX_TIMEOUT_SECONDS",
                     default=30.0,
                 ),
             ),

@@ -28,6 +28,7 @@ Current optional real adapters:
 - STT: `MoonshineSpeechToTextEngine`
 - LLM: `GeminiLanguageModel`
 - TTS: `AivisSpeechTextToSpeechEngine`
+- TTS: `VoicevoxTextToSpeechEngine`
 - Output: `SpeakerAudioOutput`
 
 Current optional presentation path:
@@ -42,7 +43,7 @@ Current hard constraints in the shipped app assembly:
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; macOS also requires Screen Recording permission, and Windows uses WASAPI process loopback for the selected process tree while the target process stays alive
 - Windows application-audio capture depends on `csc.exe` plus a Windows build with process-loopback support
 - screen capture currently supports macOS and Windows; macOS also requires Screen Recording permission
-- `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
+- `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis` or `voicevox`
 - speaker playback uses `afplay` by default on macOS and PowerShell `SoundPlayer` on Windows unless `VOCALIVE_SPEAKER_COMMAND` is set
 - the overlay is local browser UI only; it is driven by playback-chunk events rather than model token streaming
 

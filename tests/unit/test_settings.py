@@ -63,6 +63,18 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.model_provider, "gemini")
         self.assertEqual(settings.tts_provider, "aivis")
 
+    def test_from_env_normalizes_voicevox_alias(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_TTS_PROVIDER": "Voice Vox",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(settings.tts_provider, "voicevox")
+
     def test_from_env_rejects_unknown_provider_names(self) -> None:
         with patch.dict(os.environ, {"VOCALIVE_TTS_PROVIDER": "unsupported"}, clear=True):
             with self.assertRaisesRegex(ValueError, "Unsupported tts provider"):
@@ -435,6 +447,11 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_AIVIS_SPEAKER_NAME",
             "VOCALIVE_AIVIS_STYLE_NAME",
             "VOCALIVE_AIVIS_TIMEOUT_SECONDS",
+            "VOCALIVE_VOICEVOX_BASE_URL",
+            "VOCALIVE_VOICEVOX_SPEAKER_ID",
+            "VOCALIVE_VOICEVOX_SPEAKER_NAME",
+            "VOCALIVE_VOICEVOX_STYLE_NAME",
+            "VOCALIVE_VOICEVOX_TIMEOUT_SECONDS",
         }
 
         actual_names = {

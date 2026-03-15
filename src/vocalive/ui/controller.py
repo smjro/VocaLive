@@ -502,6 +502,7 @@ _PAGE_TEMPLATE = """
       screen_capture: "Screen Capture",
       moonshine: "Moonshine",
       aivis: "Aivis",
+      voicevox: "VOICEVOX",
     };
 
     const groupsRoot = document.getElementById("groups");

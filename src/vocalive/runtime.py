@@ -20,6 +20,7 @@ from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.tts.aivis import AivisSpeechTextToSpeechEngine
 from vocalive.tts.mock import MockTextToSpeechEngine
+from vocalive.tts.voicevox import VoicevoxTextToSpeechEngine
 from vocalive.ui.overlay import OverlayServer
 from vocalive.util.logging import get_logger, log_event
 
@@ -86,12 +87,20 @@ def build_orchestrator(
             style_name=settings.aivis.style_name,
             timeout_seconds=settings.aivis.timeout_seconds,
         )
+    elif settings.tts_provider == "voicevox":
+        tts_engine = VoicevoxTextToSpeechEngine(
+            base_url=settings.voicevox.base_url,
+            speaker_id=settings.voicevox.speaker_id,
+            speaker_name=settings.voicevox.speaker_name,
+            style_name=settings.voicevox.style_name,
+            timeout_seconds=settings.voicevox.timeout_seconds,
+        )
     else:
         tts_engine = MockTextToSpeechEngine()
     if settings.output.provider == OutputProvider.SPEAKER:
-        if settings.tts_provider != "aivis":
+        if settings.tts_provider not in {"aivis", "voicevox"}:
             raise ValueError(
-                "speaker output currently requires VOCALIVE_TTS_PROVIDER=aivis"
+                "speaker output currently requires VOCALIVE_TTS_PROVIDER=aivis or voicevox"
             )
         audio_output = SpeakerAudioOutput(
             playback_command=parse_playback_command(settings.output.speaker_command)
