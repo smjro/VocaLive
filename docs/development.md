@@ -70,7 +70,7 @@ The current entry point is `src/vocalive/main.py`.
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected higher-fidelity external mic over a built-in default input and skips Bluetooth hands-free / AG Audio inputs during auto-selection
 - the microphone path uses local RMS thresholding plus silence timing, not a production VAD
 - the stdin shell sets `AudioSegment.transcript_hint`, so `moonshine`-selected configs can still exercise Gemini and Aivis wiring before switching to live microphone capture
-- when screen capture is enabled, configured trigger phrases attach one screenshot of the configured window to the current Gemini turn only
+- when screen capture is enabled, explicit trigger phrases attach one screenshot of the configured window to the current Gemini turn only; optional passive screen-reference phrases can also attach one, but passive sends are rate-limited and unchanged screenshots are skipped
 
 Speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
 
@@ -134,6 +134,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title |
 | `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Injects a per-turn language instruction before the LLM call; set empty to disable |
+| `VOCALIVE_USER_NAME` | unset | Optional user name injected before the LLM call so the assistant can answer who it is speaking with without defaulting to name-based greetings |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept raw in LLM requests before older conversation is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the bounded earlier-conversation summary inserted ahead of the recent raw window |
 | `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept raw in LLM requests before older app context is compacted |
@@ -148,10 +149,13 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30` | Gemini HTTP timeout |
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
-| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku/Mashima surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it |
+| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required selector matched against on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases matched against the normalized utterance |
+| `VOCALIVE_SCREEN_PASSIVE_ENABLED` | `false` | Allows screen-reference phrases to attach a screenshot opportunistically during normal conversation |
+| `VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES` | `この画面,今の画面,いまの画面,見えてる,見えてます` | Comma-separated screen-reference phrases checked only when passive capture is enabled |
+| `VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS` | `30.0` | Minimum delay between passive screenshot sends; unchanged passive screenshots are also skipped |
 | `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |

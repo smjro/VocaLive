@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from vocalive.audio.output import AudioOutput
 from vocalive.config.settings import (
@@ -102,6 +104,8 @@ class ConversationOrchestrator:
         self._active_context: TurnContext | None = None
         self._active_stage: str | None = None
         self._last_assistant_response_ms: float | None = None
+        self._last_screen_observation_ms: float | None = None
+        self._last_screen_capture_fingerprint: str | None = None
 
     async def start(self) -> None:
         if self._worker_task is not None:
@@ -563,7 +567,7 @@ class ConversationOrchestrator:
                 ),
             )
         )
-        identity_instruction = _build_participant_identity_instruction()
+        identity_instruction = _build_participant_identity_instruction(self.settings)
         if identity_instruction is not None:
             messages.insert(0, ConversationMessage(role="system", content=identity_instruction))
         language_instruction = _build_conversation_language_instruction(conversation_language)
@@ -619,8 +623,34 @@ class ConversationOrchestrator:
             return tuple()
         if not self.language_model.supports_multimodal_input:
             return tuple()
-        if not _should_capture_screen(user_text, settings.trigger_phrases):
+        capture_mode = _classify_screen_capture_request(
+            user_text,
+            trigger_phrases=settings.trigger_phrases,
+            passive_enabled=settings.passive_enabled,
+            passive_trigger_phrases=settings.passive_trigger_phrases,
+        )
+        if capture_mode is None:
             return tuple()
+
+        capture_timestamp_ms: float | None = None
+        if capture_mode == "passive":
+            capture_timestamp_ms = monotonic_ms()
+            if _passive_screen_capture_is_on_cooldown(
+                now_ms=capture_timestamp_ms,
+                last_observation_ms=self._last_screen_observation_ms,
+                cooldown_seconds=settings.passive_cooldown_seconds,
+            ):
+                log_event(
+                    self.logger,
+                    "screen_capture_skipped",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    screen_capture_provider=self.screen_capture_engine.name,
+                    screen_window_name=settings.window_name,
+                    reason="passive_cooldown",
+                    trigger_mode=capture_mode,
+                )
+                return tuple()
 
         self._active_stage = "screen_capture"
         try:
@@ -643,6 +673,29 @@ class ConversationOrchestrator:
             )
             return tuple()
 
+        if capture_timestamp_ms is None:
+            capture_timestamp_ms = monotonic_ms()
+        screenshot_fingerprint = _screen_capture_fingerprint(screenshot)
+        self._last_screen_observation_ms = capture_timestamp_ms
+        if (
+            capture_mode == "passive"
+            and screenshot_fingerprint == self._last_screen_capture_fingerprint
+        ):
+            log_event(
+                self.logger,
+                "screen_capture_skipped",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                screen_capture_provider=self.screen_capture_engine.name,
+                screen_window_name=settings.window_name,
+                reason="passive_unchanged",
+                trigger_mode=capture_mode,
+                mime_type=screenshot.mime_type,
+                byte_length=len(screenshot.data),
+            )
+            return tuple()
+
+        self._last_screen_capture_fingerprint = screenshot_fingerprint
         log_event(
             self.logger,
             "screen_capture_ready",
@@ -650,10 +703,15 @@ class ConversationOrchestrator:
             turn_id=context.turn_id,
             screen_capture_provider=self.screen_capture_engine.name,
             screen_window_name=settings.window_name,
+            trigger_mode=capture_mode,
             mime_type=screenshot.mime_type,
             byte_length=len(screenshot.data),
         )
-        return _build_screen_capture_parts(screenshot, settings.window_name)
+        return _build_screen_capture_parts(
+            screenshot,
+            settings.window_name,
+            capture_mode=capture_mode,
+        )
 
     async def _prepare_segment_for_queue(
         self,
@@ -715,12 +773,21 @@ class ConversationOrchestrator:
         )
 
 
-def _build_participant_identity_instruction() -> str:
+def _build_participant_identity_instruction(settings: AppSettings) -> str:
+    user_name = (settings.conversation.user_name or "").strip()
+    if user_name:
+        return (
+            "Your name is コハク. "
+            f"The current user's name is {user_name}. "
+            "If the user asks what their name is or who you are speaking with, answer with that name. "
+            "Do not begin replies by addressing the user by name unless the user asks for that "
+            "or the name is genuinely needed for clarity."
+        )
     return (
         "Your name is コハク. "
-        "The user's name is ましま. "
-        "Understand that you are speaking directly with ましま, and use those names correctly "
-        "whenever either name matters in the reply."
+        "You are speaking directly with the current user. "
+        "Do not begin replies by addressing the user by name unless the user asks for that "
+        "or the name is genuinely needed for clarity."
     )
 
 
@@ -767,8 +834,20 @@ def _language_name(language: str) -> str:
 def _build_screen_capture_parts(
     screenshot: ConversationInlineDataPart,
     window_name: str | None,
+    capture_mode: Literal["explicit", "passive"],
 ) -> tuple[ConversationRequestPart, ...]:
-    if window_name:
+    if capture_mode == "passive" and window_name:
+        context_text = (
+            f"Configured target window: {window_name}. "
+            "The attached image is a screenshot of that window for this turn because the user "
+            "appears to be referring to the current screen."
+        )
+    elif capture_mode == "passive":
+        context_text = (
+            "The attached image is a screenshot of the requested window for this turn because "
+            "the user appears to be referring to the current screen."
+        )
+    elif window_name:
         context_text = (
             f"Configured target window: {window_name}. "
             "The attached image is a screenshot of that window for this turn."
@@ -781,7 +860,20 @@ def _build_screen_capture_parts(
     )
 
 
-def _should_capture_screen(user_text: str, trigger_phrases: tuple[str, ...]) -> bool:
+def _classify_screen_capture_request(
+    user_text: str,
+    trigger_phrases: tuple[str, ...],
+    passive_enabled: bool,
+    passive_trigger_phrases: tuple[str, ...],
+) -> Literal["explicit", "passive"] | None:
+    if _matches_screen_trigger(user_text, trigger_phrases):
+        return "explicit"
+    if passive_enabled and _matches_screen_trigger(user_text, passive_trigger_phrases):
+        return "passive"
+    return None
+
+
+def _matches_screen_trigger(user_text: str, trigger_phrases: tuple[str, ...]) -> bool:
     normalized_user_text = _normalize_screen_trigger_text(user_text)
     if not normalized_user_text:
         return False
@@ -794,6 +886,24 @@ def _should_capture_screen(user_text: str, trigger_phrases: tuple[str, ...]) -> 
 
 def _normalize_screen_trigger_text(value: str) -> str:
     return "".join(value.lower().split())
+
+
+def _passive_screen_capture_is_on_cooldown(
+    now_ms: float,
+    last_observation_ms: float | None,
+    cooldown_seconds: float,
+) -> bool:
+    if last_observation_ms is None or cooldown_seconds <= 0:
+        return False
+    return (now_ms - last_observation_ms) < (cooldown_seconds * 1000.0)
+
+
+def _screen_capture_fingerprint(screenshot: ConversationInlineDataPart) -> str:
+    digest = hashlib.sha256()
+    digest.update(screenshot.mime_type.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(screenshot.data)
+    return digest.hexdigest()
 
 
 def _assistant_names_for_interrupt(settings: AppSettings) -> tuple[str, ...]:

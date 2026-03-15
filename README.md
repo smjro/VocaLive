@@ -151,7 +151,8 @@ Screen-capture notes:
 
 - screen capture is request-scoped, not persistent session history
 - older user/assistant turns are compacted into one system summary when the request window grows past the configured raw-message count
-- capture is triggered only when the normalized user utterance contains one of the configured trigger phrases
+- explicit capture is triggered when the normalized user utterance contains one of the configured trigger phrases
+- optional passive capture can also watch for configured screen-reference phrases during normal conversation; passive sends are rate-limited and unchanged screenshots are skipped
 - the current implementation resolves the first on-screen window whose title or owner name matches `VOCALIVE_SCREEN_WINDOW_NAME` on macOS and Windows
 - captured screenshots are downscaled so the longest edge is at most `1280px` before they are attached to Gemini; set `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` empty to disable that
 - the resolved window id is cached and reused until capture fails, then looked up again
@@ -191,6 +192,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_MODEL_PROVIDER` | `mock` | LLM adapter; accepts `gemini` and aliases such as `google gemini` |
 | `VOCALIVE_TTS_PROVIDER` | `mock` | TTS adapter; accepts `aivis` and aliases such as `aivis speech` |
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
+| `VOCALIVE_USER_NAME` | unset | Optional user name injected before the LLM call so the assistant can answer who it is speaking with without defaulting to name-based greetings |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept verbatim in Gemini requests before older app context is compacted |
@@ -243,10 +245,13 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30.0` | Gemini HTTP timeout |
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
-| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku/Mashima surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
+| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |
+| `VOCALIVE_SCREEN_PASSIVE_ENABLED` | `false` | Allows screen-reference phrases to attach a screenshot opportunistically during normal conversation |
+| `VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES` | `この画面,今の画面,いまの画面,見えてる,見えてます` | Comma-separated screen-reference phrases checked only when passive capture is enabled |
+| `VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS` | `30.0` | Minimum delay between passive screenshot sends; unchanged passive screenshots are also skipped |
 | `VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS` | `5.0` | Timeout for window lookup and platform capture helpers |
 | `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` | `1280` | Resizes captured screenshots so their longest edge stays within this many pixels; empty disables resizing |
 | `VOCALIVE_MOONSHINE_MODEL` | `base` | Moonshine model architecture such as `base` / `tiny`, or a concrete model id such as `base-ja` |
@@ -267,7 +272,7 @@ Current provider support:
 - optional application-audio capture resolves one named running app, segments audio into utterances, and by default submits those transcripts as labeled application context without immediate assistant replies
 - older application-audio context is compacted into one bounded system summary while the newest configured app-audio messages remain verbatim in requests
 - on macOS, application-audio capture uses ScreenCaptureKit to isolate the selected app; on Windows, application-audio capture uses WASAPI process loopback for the selected process tree while the selected process remains alive
-- optional screen capture resolves a named on-screen window on macOS or Windows and attaches one PNG of that window to the current Gemini turn when a trigger phrase matches
+- optional screen capture resolves a named on-screen window on macOS or Windows and attaches one PNG of that window to the current Gemini turn when an explicit trigger phrase or an eligible passive screen-reference phrase matches
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
 - `aivis` uses the local AivisSpeech engine API and resolves a style id from `/speakers` when needed
 - `speaker` output plays synthesized audio through the configured external command or the platform default playback command

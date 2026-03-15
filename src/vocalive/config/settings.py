@@ -34,10 +34,10 @@ _PROVIDER_ALIASES = {
 
 DEFAULT_GEMINI_SYSTEM_INSTRUCTION = (
     "You are VocaLive's conversation character, and your name is コハク. "
-    "The user you are speaking with is named ましま. "
     "Use a surreal, low-energy, deadpan-comic persona inspired by the overall vibe of Kamiusagi Rope. "
     "Do not copy character names, world details, catchphrases, or existing lines. "
     "Avoid generic AI-assistant phrasing, stiff disclaimers, and over-explaining. "
+    "Do not start replies by addressing the user by name unless they clearly ask for that or it is needed for clarity. "
     "Keep replies short, natural, conversational, and slightly offbeat. "
     "Answer the user's actual question first, then if helpful add one dry sideways observation. "
     "Stay coherent and helpful rather than turning nonsense into the main point."
@@ -49,6 +49,13 @@ DEFAULT_SCREEN_TRIGGER_PHRASES = (
     "画面を見て",
     "スクショみて",
     "スクショ見て",
+)
+DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES = (
+    "この画面",
+    "今の画面",
+    "いまの画面",
+    "見えてる",
+    "見えてます",
 )
 
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
@@ -148,6 +155,7 @@ CONTROLLER_SETTING_DEFINITIONS = (
         "ja",
         nullable=True,
     ),
+    SettingDefinition("VOCALIVE_USER_NAME", "conversation", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT", "context", "int", "8"),
     SettingDefinition(
         "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
@@ -326,6 +334,21 @@ CONTROLLER_SETTING_DEFINITIONS = (
         nullable=True,
         multiline=True,
     ),
+    SettingDefinition("VOCALIVE_SCREEN_PASSIVE_ENABLED", "screen_capture", "bool", "false"),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES",
+        "screen_capture",
+        "tuple",
+        ",".join(DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES),
+        nullable=True,
+        multiline=True,
+    ),
+    SettingDefinition(
+        "VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS",
+        "screen_capture",
+        "float",
+        "30.0",
+    ),
     SettingDefinition(
         "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS",
         "screen_capture",
@@ -486,6 +509,12 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_OVERLAY_CHARACTER_NAME": SettingDocumentation(
         description="Accessibility label and page text for the overlay character"
     ),
+    "VOCALIVE_USER_NAME": SettingDocumentation(
+        description=(
+            "Optional user name injected before the LLM call so the assistant can answer who "
+            "it is speaking with without defaulting to name-based greetings"
+        )
+    ),
     "VOCALIVE_CONVERSATION_LANGUAGE": SettingDocumentation(
         description="Per-turn language instruction injected before the LLM call; set empty to disable"
     ),
@@ -549,7 +578,7 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     ),
     "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION": SettingDocumentation(
         description="Overrides the default Gemini character prompt; set empty to disable it entirely",
-        default_label="Kohaku/Mashima surreal deadpan persona prompt",
+        default_label="Kohaku surreal deadpan persona prompt",
     ),
     "VOCALIVE_SCREEN_CAPTURE_ENABLED": SettingDocumentation(
         description="Enables request-scoped named-window screenshot capture for Gemini turns"
@@ -559,6 +588,23 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     ),
     "VOCALIVE_SCREEN_TRIGGER_PHRASES": SettingDocumentation(
         description="Comma-separated trigger phrases that cause a screenshot to be attached"
+    ),
+    "VOCALIVE_SCREEN_PASSIVE_ENABLED": SettingDocumentation(
+        description=(
+            "Allows screen-reference phrases to attach a screenshot opportunistically during "
+            "normal conversation"
+        )
+    ),
+    "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES": SettingDocumentation(
+        description=(
+            "Comma-separated screen-reference phrases checked only when passive capture is enabled"
+        )
+    ),
+    "VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS": SettingDocumentation(
+        description=(
+            "Minimum delay between passive screenshot sends; unchanged passive screenshots are "
+            "also skipped"
+        )
     ),
     "VOCALIVE_SCREEN_CAPTURE_TIMEOUT_SECONDS": SettingDocumentation(
         description="Timeout for window lookup and platform capture helpers"
@@ -740,12 +786,16 @@ class ScreenCaptureSettings:
     enabled: bool = False
     window_name: str | None = None
     trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_TRIGGER_PHRASES
+    passive_enabled: bool = False
+    passive_trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES
+    passive_cooldown_seconds: float = 30.0
     timeout_seconds: float = 5.0
     resize_max_edge_px: int | None = 1280
 
 
 @dataclass
 class ConversationSettings:
+    user_name: str | None = None
     language: str | None = "ja"
 
 
@@ -840,6 +890,11 @@ class AppSettings:
                 ),
             ),
             conversation=ConversationSettings(
+                user_name=_read_optional_str_with_default(
+                    mapping,
+                    "VOCALIVE_USER_NAME",
+                    default=None,
+                ),
                 language=_read_optional_str_with_default(
                     mapping,
                     "VOCALIVE_CONVERSATION_LANGUAGE",
@@ -1116,6 +1171,21 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_SCREEN_TRIGGER_PHRASES",
                     default=DEFAULT_SCREEN_TRIGGER_PHRASES,
+                ),
+                passive_enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_SCREEN_PASSIVE_ENABLED",
+                    default=False,
+                ),
+                passive_trigger_phrases=_read_str_tuple(
+                    mapping,
+                    "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES",
+                    default=DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES,
+                ),
+                passive_cooldown_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_SCREEN_PASSIVE_COOLDOWN_SECONDS",
+                    default=30.0,
                 ),
                 timeout_seconds=_read_float(
                     mapping,
