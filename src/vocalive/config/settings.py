@@ -350,6 +350,11 @@ CONTROLLER_SETTING_DEFINITIONS = (
 _CONTROLLER_SETTING_INDEX = {
     definition.env_name: definition for definition in CONTROLLER_SETTING_DEFINITIONS
 }
+_CONTROLLER_SECRET_ENV_NAMES = tuple(
+    definition.env_name
+    for definition in CONTROLLER_SETTING_DEFINITIONS
+    if definition.secret
+)
 
 _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_SESSION_ID": SettingDocumentation(
@@ -639,6 +644,19 @@ def controller_default_values() -> dict[str, str | None]:
         definition.env_name: definition.default_raw
         for definition in CONTROLLER_SETTING_DEFINITIONS
     }
+
+
+def controller_secret_env_names() -> tuple[str, ...]:
+    return _CONTROLLER_SECRET_ENV_NAMES
+
+
+def sanitize_persisted_controller_values(
+    values: Mapping[str, str | None],
+) -> dict[str, str | None]:
+    normalized = normalize_controller_values(values)
+    for env_name in _CONTROLLER_SECRET_ENV_NAMES:
+        normalized[env_name] = _CONTROLLER_SETTING_INDEX[env_name].default_raw
+    return normalized
 
 
 @dataclass

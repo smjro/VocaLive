@@ -4,7 +4,7 @@ VocaLive is an adapter-based local voice conversation runtime focused on low lat
 
 The repository currently ships with:
 
-- a local browser controller that saves the full runtime configuration
+- a local browser controller that saves non-secret runtime configuration
 - an explicit headless `run` mode with the legacy stdin shell for local development
 - optional live microphone capture via `sounddevice`
 - optional application-audio capture for one named running app on macOS or Windows
@@ -18,7 +18,7 @@ The repository currently ships with:
 - Implemented: bounded queue orchestration with explicit overflow handling
 - Implemented: stale-turn interruption on new utterances
 - Implemented: configurable microphone barge-in modes including explicit assistant-address interruption
-- Implemented: local browser GUI controller with saved full-config editing, runtime start/stop, and explicit headless `run` mode
+- Implemented: local browser GUI controller with saved non-secret config editing, runtime start/stop, and explicit headless `run` mode
 - Implemented: stdin shell and microphone capture with preroll / hold / silence-based utterance detection
 - Implemented: automatic preference for higher-fidelity external microphones when the system default input is built-in, while avoiding Bluetooth hands-free inputs unless explicitly requested
 - Implemented: optional macOS per-app application-audio capture and Windows process-loopback application-audio capture, both feeding STT and storing transcripts as application context by default
@@ -49,7 +49,7 @@ Start the local browser controller from the source tree:
 PYTHONPATH=src python3 -m vocalive
 ```
 
-This opens a controller page in your default browser, stores settings in `.vocalive/controller-config.json`, and lets you start or stop the live runtime without re-entering variables.
+This opens a controller page in your default browser, stores non-secret settings in `.vocalive/controller-config.json`, and lets you start or stop the live runtime. Secret fields such as `VOCALIVE_GEMINI_API_KEY` are never written to disk and must be entered each time.
 
 Windows PowerShell:
 
@@ -101,7 +101,7 @@ PYTHONPATH=src python3 -m vocalive run
 
 On Windows PowerShell, set the same variables with `$env:NAME = "value"` and run `python -m vocalive run`.
 
-If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved config file.
+If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved non-secret config, while secret fields must be re-entered.
 
 When `VOCALIVE_OVERLAY_ENABLED=true`, VocaLive starts a local overlay server and prints its URL. By default it also asks the system browser to open the page automatically. The overlay is transparent, renders the character on the right, and shows assistant text only while the assistant is actively speaking. Each sentence-sized chunk is revealed progressively to match playback timing, then cleared when playback finishes or is interrupted.
 
@@ -177,9 +177,9 @@ python3 -m compileall src tests
 
 ## Configuration
 
-The default workflow is controller-driven: `python -m vocalive` edits and persists the full env-shaped config in `.vocalive/controller-config.json`.
+The default workflow is controller-driven: `python -m vocalive` edits and persists the non-secret env-shaped config in `.vocalive/controller-config.json`.
 
-`python -m vocalive run` keeps the runtime env-compatible by loading the saved config first and then applying current environment variables as overrides.
+`python -m vocalive run` keeps the runtime env-compatible by loading the saved config first and then applying current environment variables as overrides. Secret values such as `VOCALIVE_GEMINI_API_KEY` are not loaded from the controller config file, so provide them via the current environment when needed.
 
 The controller UI exposes the same per-setting descriptions through each field's `Info` toggle.
 

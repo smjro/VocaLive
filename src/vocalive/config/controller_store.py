@@ -6,10 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vocalive.config.settings import controller_default_values, normalize_controller_values
+from vocalive.config.settings import (
+    controller_default_values,
+    controller_secret_env_names,
+    normalize_controller_values,
+    sanitize_persisted_controller_values,
+)
 
 
 CONTROLLER_CONFIG_VERSION = 1
+_CONTROLLER_SECRET_ENV_NAMES = frozenset(controller_secret_env_names())
 
 
 @dataclass(frozen=True)
@@ -44,16 +50,23 @@ class ControllerConfigStore:
         normalized = normalize_controller_values(
             {str(key): _coerce_raw_value(value) for key, value in raw_values.items()}
         )
-        return ControllerConfig(version=CONTROLLER_CONFIG_VERSION, values=normalized)
+        sanitized = sanitize_persisted_controller_values(normalized)
+        if sanitized != normalized:
+            self.save_values(sanitized)
+        return ControllerConfig(version=CONTROLLER_CONFIG_VERSION, values=sanitized)
 
     def load_values(self) -> dict[str, str | None]:
         return dict(self.load().values)
 
     def save_values(self, values: dict[str, str | None]) -> dict[str, str | None]:
-        normalized = normalize_controller_values(values)
+        normalized = sanitize_persisted_controller_values(values)
         payload = {
             "version": CONTROLLER_CONFIG_VERSION,
-            "values": normalized,
+            "values": {
+                env_name: value
+                for env_name, value in normalized.items()
+                if env_name not in _CONTROLLER_SECRET_ENV_NAMES
+            },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(

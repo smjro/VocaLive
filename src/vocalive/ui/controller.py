@@ -446,6 +446,7 @@ _PAGE_TEMPLATE = """
           <h1>VocaLive</h1>
           <p class="subcopy">
             設定を保存し、必要なときだけ会話ランタイムを開始・停止します。
+            API キーなどの秘密項目は保存されないため、起動前に毎回入力します。
             `stdin` シェルは GUI からは起動せず、`python -m vocalive run` を使います。
           </p>
         </div>
@@ -536,6 +537,9 @@ _PAGE_TEMPLATE = """
       if (field.description) {
         lines.push('<p>' + renderInlineMarkup(field.description) + '</p>');
       }
+      if (field.secret) {
+        lines.push("<p>Security: this value is never saved to <code>controller-config.json</code>. Enter it each time before starting.</p>");
+      }
       if (field.kind === "enum" && Array.isArray(field.options) && field.options.length > 0) {
         const options = field.options.map(function(option) {
           return "<code>" + escapeHtml(option) + "</code>";
@@ -559,9 +563,13 @@ _PAGE_TEMPLATE = """
     function renderField(field) {
       const fieldId = "field-" + field.env_name;
       const currentValue = state.values[field.env_name];
-      const resolvedValue = currentValue === null || currentValue === undefined
-        ? (field.default_raw ?? "")
-        : String(currentValue);
+      const resolvedValue = field.secret
+        ? (currentValue === null || currentValue === undefined ? "" : String(currentValue))
+        : (
+          currentValue === null || currentValue === undefined
+            ? (field.default_raw ?? "")
+            : String(currentValue)
+        );
       const wide = field.multiline || field.kind === "tuple";
       const defaultHtml = '<span class="field-default">' + escapeHtml(formatDefault(field)) + '</span>';
       const infoHtml = renderFieldInfo(field);
@@ -601,7 +609,10 @@ _PAGE_TEMPLATE = """
         controlHtml = '<input type="number" inputmode="' + inputMode + '" step="any" ' + commonAttrs + ' value="' + escapeHtml(resolvedValue) + '" />';
       } else {
         const type = field.secret ? "password" : "text";
-        controlHtml = '<input type="' + type + '" ' + commonAttrs + ' value="' + escapeHtml(resolvedValue) + '" />';
+        const securityAttrs = field.secret
+          ? ' autocomplete="new-password" placeholder="保存されません。開始前に毎回入力"'
+          : "";
+        controlHtml = '<input type="' + type + '" ' + commonAttrs + securityAttrs + ' value="' + escapeHtml(resolvedValue) + '" />';
       }
 
       return `
@@ -853,6 +864,8 @@ class ControllerRuntimeManager:
 
     def close(self) -> None:
         if not self._started:
+            if not self._loop.is_closed():
+                self._loop.close()
             return
         future = asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop)
         future.result()
@@ -1186,8 +1199,7 @@ class ControllerServer:
                 try:
                     payload = controller._read_json_payload(self)
                     values = controller._extract_values(payload)
-                    normalized = controller._validate_values(values)
-                    saved_values = controller.store.save_values(normalized)
+                    saved_values = controller._save_config_values(values)
                     controller._serve_json(
                         self,
                         {
@@ -1205,9 +1217,7 @@ class ControllerServer:
                     if path == "/api/runtime/start":
                         payload = controller._read_json_payload(self)
                         values = controller._extract_values(payload)
-                        normalized = controller._validate_values(values)
-                        saved_values = controller.store.save_values(normalized)
-                        runtime = controller.runtime_manager.start_runtime(saved_values)
+                        saved_values, runtime = controller._start_runtime_with_values(values)
                         controller._serve_json(
                             self,
                             {
@@ -1288,6 +1298,19 @@ class ControllerServer:
         normalized = normalize_controller_values(values)
         AppSettings.from_mapping(normalized)
         return normalized
+
+    def _save_config_values(self, values: dict[str, str | None]) -> dict[str, str | None]:
+        normalized = self._validate_values(values)
+        return self.store.save_values(normalized)
+
+    def _start_runtime_with_values(
+        self,
+        values: dict[str, str | None],
+    ) -> tuple[dict[str, str | None], dict[str, str | None]]:
+        normalized = self._validate_values(values)
+        saved_values = self.store.save_values(normalized)
+        runtime = self.runtime_manager.start_runtime(normalized)
+        return saved_values, runtime
 
     def _load_values_with_warning(self) -> tuple[dict[str, str | None], str | None]:
         try:

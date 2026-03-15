@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
 import unittest
@@ -72,7 +73,7 @@ class _FakeOverlay:
 
 
 class ControllerConfigStoreTests(unittest.TestCase):
-    def test_save_and_load_round_trip(self) -> None:
+    def test_save_omits_secret_values_from_disk(self) -> None:
         with TemporaryDirectory() as tempdir:
             store = ControllerConfigStore(Path(tempdir) / "controller-config.json")
 
@@ -83,11 +84,38 @@ class ControllerConfigStoreTests(unittest.TestCase):
                 }
             )
             loaded = store.load_values()
+            payload = json.loads(store.path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["VOCALIVE_INPUT_PROVIDER"], "microphone")
         self.assertEqual(loaded["VOCALIVE_INPUT_PROVIDER"], "microphone")
-        self.assertEqual(loaded["VOCALIVE_GEMINI_API_KEY"], "secret")
+        self.assertIsNone(saved["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(loaded["VOCALIVE_GEMINI_API_KEY"])
+        self.assertNotIn("VOCALIVE_GEMINI_API_KEY", payload["values"])
         self.assertEqual(loaded["VOCALIVE_MODEL_PROVIDER"], "mock")
+
+    def test_load_scrubs_legacy_secret_values_from_disk(self) -> None:
+        with TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "controller-config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "values": {
+                            "VOCALIVE_INPUT_PROVIDER": "microphone",
+                            "VOCALIVE_GEMINI_API_KEY": "legacy-secret",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = ControllerConfigStore(path)
+
+            loaded = store.load_values()
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(loaded["VOCALIVE_INPUT_PROVIDER"], "microphone")
+        self.assertIsNone(loaded["VOCALIVE_GEMINI_API_KEY"])
+        self.assertNotIn("VOCALIVE_GEMINI_API_KEY", payload["values"])
 
 
 class ControllerRuntimeManagerTests(unittest.TestCase):
@@ -134,6 +162,7 @@ class ControllerServerTests(unittest.TestCase):
         self._tempdir = TemporaryDirectory()
         self.store = ControllerConfigStore(Path(self._tempdir.name) / "controller-config.json")
         self.server = ControllerServer(store=self.store, auto_open=False)
+        self.addCleanup(self.server.close)
         self.addCleanup(self._tempdir.cleanup)
 
     def test_validate_values_and_store_round_trip_secret_values(self) -> None:
@@ -146,17 +175,42 @@ class ControllerServerTests(unittest.TestCase):
         loaded = self.store.load_values()
 
         self.assertEqual(
-            saved["VOCALIVE_GEMINI_API_KEY"],
+            normalized["VOCALIVE_GEMINI_API_KEY"],
             "top-secret",
         )
         self.assertEqual(
+            saved["VOCALIVE_GEMINI_API_KEY"],
+            None,
+        )
+        self.assertEqual(
             loaded["VOCALIVE_GEMINI_API_KEY"],
-            "top-secret",
+            None,
         )
         self.assertEqual(
             loaded["VOCALIVE_INPUT_PROVIDER"],
             "microphone",
         )
+
+    def test_runtime_start_uses_secret_value_without_persisting_it(self) -> None:
+        values = controller_default_values()
+        values["VOCALIVE_INPUT_PROVIDER"] = "microphone"
+        values["VOCALIVE_GEMINI_API_KEY"] = "top-secret"
+
+        with patch.object(
+            self.server.runtime_manager,
+            "start_runtime",
+            return_value={"status": "running"},
+        ) as start_runtime:
+            saved_values, runtime = self.server._start_runtime_with_values(values)
+
+        start_runtime.assert_called_once()
+        self.assertEqual(
+            start_runtime.call_args.args[0]["VOCALIVE_GEMINI_API_KEY"],
+            "top-secret",
+        )
+        self.assertEqual(runtime["status"], "running")
+        self.assertIsNone(saved_values["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(self.store.load_values()["VOCALIVE_GEMINI_API_KEY"])
 
     def test_load_values_with_warning_falls_back_to_defaults_for_invalid_json(self) -> None:
         self.store.path.parent.mkdir(parents=True, exist_ok=True)

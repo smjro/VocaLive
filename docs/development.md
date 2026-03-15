@@ -40,7 +40,7 @@ The repository currently requires Python 3.10+.
 The current entry point is `src/vocalive/main.py`.
 
 - `python -m vocalive` starts the local browser controller, loads `.vocalive/controller-config.json`, and opens the controller page on localhost
-- the controller edits and persists the full env-shaped runtime config, then starts or stops the live runtime from the browser UI
+- the controller edits and persists the non-secret env-shaped runtime config, then starts or stops the live runtime from the browser UI
 - `python -m vocalive run` starts the runtime directly using the saved config plus current environment-variable overrides
 - `VOCALIVE_INPUT_PROVIDER=stdin` keeps the text shell, but only in explicit `run` mode
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
@@ -86,8 +86,9 @@ Application-audio capture uses a small helper compiled on first use. macOS uses 
 
 Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocalive/config/settings.py`.
 
-- controller mode persists recognized `VOCALIVE_*` values in `.vocalive/controller-config.json`
+- controller mode persists recognized non-secret `VOCALIVE_*` values in `.vocalive/controller-config.json`
 - `python -m vocalive run` loads that file first, then overlays current environment variables
+- secret values such as `VOCALIVE_GEMINI_API_KEY` are intentionally excluded from the controller config and must be supplied per start or via the current environment
 - the runtime still accepts the same env variable names shown below
 
 | Variable | Default | Notes |
