@@ -5,6 +5,7 @@ import contextlib
 import io
 import sys
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -391,8 +392,16 @@ class BuildOrchestratorTests(unittest.TestCase):
                 )
 
 
+@dataclass(frozen=True)
+class _SpeechStartEvent:
+    source: str = "user"
+
+
 class _ScriptedMicrophoneInput(MicrophoneAudioInput):
-    def __init__(self, segments: list[AudioSegment | None]) -> None:
+    def __init__(
+        self,
+        segments: list[_SpeechStartEvent | AudioSegment | None],
+    ) -> None:
         self._segments = list(segments)
         self.speech_start_handler = None
 
@@ -404,7 +413,14 @@ class _ScriptedMicrophoneInput(MicrophoneAudioInput):
 
     async def read(self) -> AudioSegment | None:
         await asyncio.sleep(0)
-        return self._segments.pop(0) if self._segments else None
+        while self._segments:
+            item = self._segments.pop(0)
+            if isinstance(item, _SpeechStartEvent):
+                if self.speech_start_handler is not None:
+                    await self.speech_start_handler(item.source)
+                continue
+            return item
+        return None
 
 
 class _RecordingOrchestrator:
@@ -458,10 +474,11 @@ class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.wait_for_idle_calls, 0)
         self.assertIsNotNone(audio_input.speech_start_handler)
 
-    async def test_microphone_loop_skips_segments_while_conversation_window_is_closed(self) -> None:
+    async def test_microphone_loop_reopens_conversation_window_after_user_speech(self) -> None:
         audio_input = _ScriptedMicrophoneInput(
             [
                 AudioSegment.from_text("first"),
+                _SpeechStartEvent(),
                 AudioSegment.from_text("second"),
                 None,
             ]

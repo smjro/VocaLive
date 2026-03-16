@@ -26,7 +26,7 @@ class _FakeClock:
 
 
 class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
-    async def test_gate_cycles_between_open_and_closed_windows(self) -> None:
+    async def test_gate_waits_for_user_speech_to_reopen_after_closed_period(self) -> None:
         clock = _FakeClock()
         gate = ConversationWindowGate(
             ConversationWindowSettings(
@@ -37,11 +37,26 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
             now_ms=clock,
         )
 
+        speech_start_calls: list[str] = []
+
+        async def handler(source: str) -> None:
+            speech_start_calls.append(source)
+
+        wrapped_handler = gate.wrap_speech_start_handler(handler)
+        assert wrapped_handler is not None
+
         self.assertTrue(gate.should_forward_segment(AudioSegment.from_text("open")))
         clock.set_ms(10_000.0)
         self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("closed")))
         clock.set_ms(30_000.0)
+        self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("still closed")))
+        self.assertFalse(gate.consume_history_reset_request())
+
+        await wrapped_handler("user")
+
+        self.assertEqual(speech_start_calls, ["user"])
         self.assertTrue(gate.should_forward_segment(AudioSegment.from_text("open again")))
+        self.assertTrue(gate.consume_history_reset_request())
 
     async def test_closed_window_ignores_speech_start_and_drops_next_user_segment(self) -> None:
         clock = _FakeClock()
@@ -68,7 +83,13 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("drop me")))
 
         clock.set_ms(20_000.0)
+        self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("still waiting")))
+
+        await wrapped_handler("user")
+
+        self.assertEqual(speech_start_calls, ["user"])
         self.assertTrue(gate.should_forward_segment(AudioSegment.from_text("allow me")))
+        self.assertTrue(gate.consume_history_reset_request())
 
     async def test_application_audio_is_ungated_by_default(self) -> None:
         clock = _FakeClock()
@@ -125,6 +146,55 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_application_audio_does_not_reopen_window_while_waiting_for_user_speech(
+        self,
+    ) -> None:
+        clock = _FakeClock()
+        gate = ConversationWindowGate(
+            ConversationWindowSettings(
+                enabled=True,
+                open_duration_seconds=5.0,
+                closed_duration_seconds=20.0,
+                start_open=False,
+                apply_to_application_audio=True,
+            ),
+            now_ms=clock,
+        )
+        speech_start_calls: list[str] = []
+
+        async def handler(source: str) -> None:
+            speech_start_calls.append(source)
+
+        wrapped_handler = gate.wrap_speech_start_handler(handler)
+        assert wrapped_handler is not None
+
+        clock.set_ms(20_000.0)
+        await wrapped_handler("application_audio")
+
+        self.assertEqual(speech_start_calls, [])
+        self.assertFalse(
+            gate.should_forward_segment(
+                AudioSegment.from_text(
+                    "still blocked",
+                    source="application_audio",
+                    source_label="game",
+                )
+            )
+        )
+
+        await wrapped_handler("user")
+
+        self.assertEqual(speech_start_calls, ["user"])
+        self.assertTrue(
+            gate.should_forward_segment(
+                AudioSegment.from_text(
+                    "now open",
+                    source="application_audio",
+                    source_label="game",
+                )
+            )
+        )
+
     async def test_summary_describes_window_configuration(self) -> None:
         gate = ConversationWindowGate(
             ConversationWindowSettings(
@@ -142,4 +212,5 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
         assert summary is not None
         self.assertIn("15s open", summary)
         self.assertIn("120s closed", summary)
+        self.assertIn("reopens on user speech", summary)
         self.assertIn("microphone + app audio", summary)

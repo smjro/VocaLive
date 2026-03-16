@@ -140,7 +140,7 @@ Microphone tuning notes:
 - after one live utterance is emitted, VocaLive waits briefly before queueing the LLM turn so closely spaced microphone utterances can merge; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
 - microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
 - in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant, and `disabled` turns early microphone barge-in off
-- `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; by default this applies to microphone speech only, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends it to application audio
+- `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; after each closed interval, the next user speech starts the next open window, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends the gating itself to application audio
 - when a closed conversation window reopens and the next live utterance is accepted, VocaLive resets the stored conversation/application history first so the new turn starts fresh instead of referencing the previous window
 
 Application-audio notes:
@@ -227,9 +227,9 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
 | `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
 | `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always` interrupts active assistant speech on new user speech, `explicit` waits for a finalized utterance that directly calls the assistant, and `disabled` never interrupts early |
-| `VOCALIVE_CONVERSATION_WINDOW_ENABLED` | `false` | When enabled, live audio is only forwarded to STT during recurring conversation windows |
-| `VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS` | `20.0` | How long each conversation window stays open before live audio is skipped |
-| `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped between conversation windows |
+| `VOCALIVE_CONVERSATION_WINDOW_ENABLED` | `false` | When enabled, live audio is only forwarded to STT during conversation windows that reopen on user speech after each closed interval |
+| `VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS` | `20.0` | How long each conversation window stays open after user speech reopens it |
+| `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped before the next user speech may reopen the window |
 | `VOCALIVE_CONVERSATION_WINDOW_START_OPEN` | `true` | Start the runtime with the first conversation window already open |
 | `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO` | `false` | Apply conversation-window gating to application-audio STT as well as microphone speech |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |

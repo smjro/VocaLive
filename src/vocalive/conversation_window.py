@@ -26,7 +26,15 @@ class ConversationWindowGate:
         self.session_id = session_id
         self._now_ms = now_ms or monotonic_ms
         self._logger = logger_ or logger
-        self._cycle_anchor_ms = self._now_ms()
+        initial_now_ms = self._now_ms()
+        self._open_started_ms: float | None = None
+        self._closed_started_ms: float | None = None
+        self._awaiting_user_reopen = False
+        if self.enabled:
+            if self.settings.start_open or self.settings.closed_duration_seconds <= 0.0:
+                self._open_started_ms = initial_now_ms
+            else:
+                self._closed_started_ms = initial_now_ms
         self._drop_next_segment_sources: set[AudioSource] = set()
         self._last_reported_is_open: bool | None = None
         self._history_reset_pending = False
@@ -47,8 +55,9 @@ class ConversationWindowGate:
         return (
             "conversation window: "
             f"{start_label}, "
-            f"{_format_seconds(self.settings.open_duration_seconds)} open / "
+            f"{_format_seconds(self.settings.open_duration_seconds)} open, "
             f"{_format_seconds(self.settings.closed_duration_seconds)} closed, "
+            "reopens on user speech, "
             f"{target_label}"
         )
 
@@ -64,7 +73,11 @@ class ConversationWindowGate:
                 await _await_if_needed(handler(source))
                 return
             now_ms = self._now_ms()
-            if not self._window_is_open(now_ms):
+            is_open = self._window_is_open(now_ms)
+            if not is_open and self._should_reopen_on_speech_start(source):
+                self._start_open_window(now_ms)
+                is_open = self._window_is_open(now_ms)
+            if not is_open:
                 self._drop_next_segment_sources.add(source)
                 self._log_skip(
                     event_name="conversation_window_speech_ignored",
@@ -112,7 +125,8 @@ class ConversationWindowGate:
         return self.settings.apply_to_application_audio and source == "application_audio"
 
     def _window_is_open(self, now_ms: float) -> bool:
-        is_open = self._compute_window_is_open(now_ms)
+        self._refresh_state(now_ms)
+        is_open = not self.enabled or self._open_started_ms is not None
         if self._last_reported_is_open is None:
             self._last_reported_is_open = is_open
             return is_open
@@ -130,21 +144,40 @@ class ConversationWindowGate:
             )
         return is_open
 
-    def _compute_window_is_open(self, now_ms: float) -> bool:
+    def _refresh_state(self, now_ms: float) -> None:
         if not self.enabled:
-            return True
+            return
         open_duration_ms = self.settings.open_duration_seconds * 1000.0
         closed_duration_ms = self.settings.closed_duration_seconds * 1000.0
         if closed_duration_ms <= 0.0:
-            return True
-        cycle_duration_ms = open_duration_ms + closed_duration_ms
-        if cycle_duration_ms <= 0.0:
-            return True
-        elapsed_ms = max(0.0, now_ms - self._cycle_anchor_ms)
-        phase_offset_ms = elapsed_ms % cycle_duration_ms
-        if self.settings.start_open:
-            return phase_offset_ms < open_duration_ms
-        return phase_offset_ms >= closed_duration_ms
+            if self._open_started_ms is None:
+                self._open_started_ms = now_ms
+            self._closed_started_ms = None
+            self._awaiting_user_reopen = False
+            return
+        if self._open_started_ms is not None:
+            elapsed_open_ms = max(0.0, now_ms - self._open_started_ms)
+            if elapsed_open_ms >= open_duration_ms:
+                self._closed_started_ms = self._open_started_ms + open_duration_ms
+                self._open_started_ms = None
+                self._awaiting_user_reopen = False
+        if self._open_started_ms is not None:
+            return
+        if self._closed_started_ms is None:
+            self._closed_started_ms = now_ms
+        if self._awaiting_user_reopen:
+            return
+        elapsed_closed_ms = max(0.0, now_ms - self._closed_started_ms)
+        if elapsed_closed_ms >= closed_duration_ms:
+            self._awaiting_user_reopen = True
+
+    def _should_reopen_on_speech_start(self, source: AudioSource) -> bool:
+        return source == "user" and self._awaiting_user_reopen
+
+    def _start_open_window(self, now_ms: float) -> None:
+        self._open_started_ms = now_ms
+        self._closed_started_ms = None
+        self._awaiting_user_reopen = False
 
     def _log_skip(
         self,

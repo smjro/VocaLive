@@ -523,15 +523,15 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     ),
     "VOCALIVE_CONVERSATION_WINDOW_ENABLED": SettingDocumentation(
         description=(
-            "When enabled, live audio is only forwarded to STT during recurring conversation "
-            "windows"
+            "When enabled, live audio is only forwarded to STT during conversation windows "
+            "that reopen on user speech after each closed interval"
         )
     ),
     "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS": SettingDocumentation(
-        description="How long each conversation window stays open before live audio is skipped"
+        description="How long each conversation window stays open after user speech reopens it"
     ),
     "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS": SettingDocumentation(
-        description="How long live audio stays skipped between conversation windows"
+        description="How long live audio stays skipped before the next user speech may reopen the window"
     ),
     "VOCALIVE_CONVERSATION_WINDOW_START_OPEN": SettingDocumentation(
         description="Start the runtime with the first conversation window already open"
