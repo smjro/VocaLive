@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from vocalive.config.controller_store import ControllerConfigStore
 from vocalive.config.settings import controller_default_values
-from vocalive.ui.controller import ControllerRuntimeManager, ControllerServer
+from vocalive.ui.controller import _PAGE_TEMPLATE, ControllerRuntimeManager, ControllerServer
 
 
 class _IdleAudioInput:
@@ -234,6 +234,57 @@ class ControllerServerTests(unittest.TestCase):
         self.assertIsNone(saved_values["VOCALIVE_GEMINI_API_KEY"])
         self.assertIsNone(self.store.load_values()["VOCALIVE_GEMINI_API_KEY"])
 
+    def test_saved_secret_is_reused_from_controller_memory_on_later_start(self) -> None:
+        values = controller_default_values()
+        values["VOCALIVE_INPUT_PROVIDER"] = "microphone"
+        values["VOCALIVE_GEMINI_API_KEY"] = "top-secret"
+
+        saved_values = self.server._save_config_values(values)
+        restart_values = controller_default_values()
+        restart_values["VOCALIVE_INPUT_PROVIDER"] = "microphone"
+        restart_values["VOCALIVE_GEMINI_API_KEY"] = ""
+
+        with patch.object(
+            self.server.runtime_manager,
+            "start_runtime",
+            return_value={"status": "running"},
+        ) as start_runtime:
+            restarted_values, runtime = self.server._start_runtime_with_values(restart_values)
+
+        start_runtime.assert_called_once()
+        self.assertEqual(
+            start_runtime.call_args.args[0]["VOCALIVE_GEMINI_API_KEY"],
+            "top-secret",
+        )
+        self.assertEqual(runtime["status"], "running")
+        self.assertIsNone(saved_values["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(restarted_values["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(self.store.load_values()["VOCALIVE_GEMINI_API_KEY"])
+
+    def test_session_secret_cache_is_cleared_when_controller_is_recreated(self) -> None:
+        values = controller_default_values()
+        values["VOCALIVE_INPUT_PROVIDER"] = "microphone"
+        values["VOCALIVE_GEMINI_API_KEY"] = "top-secret"
+        self.server._save_config_values(values)
+        self.server.close()
+
+        restarted_server = ControllerServer(store=self.store, auto_open=False)
+        self.addCleanup(restarted_server.close)
+        restart_values = controller_default_values()
+        restart_values["VOCALIVE_INPUT_PROVIDER"] = "microphone"
+        restart_values["VOCALIVE_GEMINI_API_KEY"] = ""
+
+        with patch.object(
+            restarted_server.runtime_manager,
+            "start_runtime",
+            return_value={"status": "running"},
+        ) as start_runtime:
+            restarted_server._start_runtime_with_values(restart_values)
+
+        start_runtime.assert_called_once()
+        self.assertIsNone(start_runtime.call_args.args[0]["VOCALIVE_GEMINI_API_KEY"])
+        self.assertIsNone(self.store.load_values()["VOCALIVE_GEMINI_API_KEY"])
+
     def test_load_values_with_warning_falls_back_to_defaults_for_invalid_json(self) -> None:
         self.store.path.parent.mkdir(parents=True, exist_ok=True)
         self.store.path.write_text("{invalid", encoding="utf-8")
@@ -246,3 +297,8 @@ class ControllerServerTests(unittest.TestCase):
     def test_extract_values_requires_values_object(self) -> None:
         with self.assertRaisesRegex(ValueError, "`values` object"):
             self.server._extract_values({"values": ["not", "a", "dict"]})
+
+    def test_controller_page_keeps_secret_values_across_start_and_save_rerenders(self) -> None:
+        self.assertIn("secretValues: {}", _PAGE_TEMPLATE)
+        self.assertIn("rememberSecretValues(submittedValues);", _PAGE_TEMPLATE)
+        self.assertIn("state.secretValues[field.env_name]", _PAGE_TEMPLATE)

@@ -18,6 +18,7 @@ from vocalive.config.settings import (
     AppSettings,
     InputProvider,
     controller_default_values,
+    controller_secret_env_names,
     controller_setting_schema,
     normalize_controller_values,
 )
@@ -36,6 +37,7 @@ from vocalive.util.logging import configure_logging
 
 
 _CONFIG_PATH_PLACEHOLDER = "__VOCALIVE_CONTROLLER_CONFIG_PATH__"
+_CONTROLLER_SECRET_ENV_NAMES = frozenset(controller_secret_env_names())
 
 
 _PAGE_TEMPLATE = """
@@ -455,7 +457,8 @@ _PAGE_TEMPLATE = """
           <h1>VocaLive</h1>
           <p class="subcopy">
             設定を保存し、必要なときだけ会話ランタイムを開始・停止します。
-            API キーなどの秘密項目は保存されないため、起動前に毎回入力します。
+            API キーなどの秘密項目はファイル保存せず、コントローラー起動中だけメモリに保持します。
+            このページを開いている間は、再入力なしで再起動できます。
             `stdin` シェルは GUI からは起動せず、`python -m vocalive run` を使います。
           </p>
         </div>
@@ -492,6 +495,7 @@ _PAGE_TEMPLATE = """
     const state = {
       schema: [],
       values: {},
+      secretValues: {},
       runtime: null,
       busy: false,
     };
@@ -548,7 +552,7 @@ _PAGE_TEMPLATE = """
         lines.push('<p>' + renderInlineMarkup(field.description) + '</p>');
       }
       if (field.secret) {
-        lines.push("<p>Security: this value is never saved to <code>controller-config.json</code>. Enter it each time before starting.</p>");
+        lines.push("<p>Security: this value is never saved to <code>controller-config.json</code>. The current page keeps what you typed so start/save does not blank it, and the controller can also reuse its in-memory copy while it stays open.</p>");
       }
       if (field.kind === "enum" && Array.isArray(field.options) && field.options.length > 0) {
         const options = field.options.map(function(option) {
@@ -572,7 +576,9 @@ _PAGE_TEMPLATE = """
 
     function renderField(field) {
       const fieldId = "field-" + field.env_name;
-      const currentValue = state.values[field.env_name];
+      const currentValue = field.secret
+        ? state.secretValues[field.env_name]
+        : state.values[field.env_name];
       const resolvedValue = field.secret
         ? (currentValue === null || currentValue === undefined ? "" : String(currentValue))
         : (
@@ -620,7 +626,7 @@ _PAGE_TEMPLATE = """
       } else {
         const type = field.secret ? "password" : "text";
         const securityAttrs = field.secret
-          ? ' autocomplete="new-password" placeholder="保存されません。開始前に毎回入力"'
+          ? ' autocomplete="new-password" placeholder="未入力ならセッション内の既存値を再利用"'
           : "";
         controlHtml = '<input type="' + type + '" ' + commonAttrs + securityAttrs + ' value="' + escapeHtml(resolvedValue) + '" />';
       }
@@ -655,6 +661,19 @@ _PAGE_TEMPLATE = """
           </section>
         `;
       }).join("");
+    }
+
+    function rememberSecretValues(values) {
+      state.schema.forEach(function(field) {
+        if (!field.secret) {
+          return;
+        }
+        const value = values[field.env_name];
+        if (value === null || value === undefined || value === "") {
+          return;
+        }
+        state.secretValues[field.env_name] = String(value);
+      });
     }
 
     function collectValues() {
@@ -745,6 +764,7 @@ _PAGE_TEMPLATE = """
       ]);
       state.schema = schemaPayload.schema || [];
       state.values = configPayload.values || {};
+      state.secretValues = {};
       renderGroups();
       updateRuntime(runtimePayload.runtime || runtimePayload);
       setWarning(configPayload.warning || "");
@@ -763,11 +783,13 @@ _PAGE_TEMPLATE = """
       setBusy(true);
       setError("");
       try {
+        const submittedValues = collectValues();
+        rememberSecretValues(submittedValues);
         const payload = await requestJson("/api/config", {
           method: "PUT",
-          body: JSON.stringify({ values: collectValues() }),
+          body: JSON.stringify({ values: submittedValues }),
         });
-        state.values = payload.values || collectValues();
+        state.values = payload.values || submittedValues;
         renderGroups();
         setWarning(payload.warning || "");
       } finally {
@@ -779,11 +801,13 @@ _PAGE_TEMPLATE = """
       setBusy(true);
       setError("");
       try {
+        const submittedValues = collectValues();
+        rememberSecretValues(submittedValues);
         const payload = await requestJson("/api/runtime/start", {
           method: "POST",
-          body: JSON.stringify({ values: collectValues() }),
+          body: JSON.stringify({ values: submittedValues }),
         });
-        state.values = payload.values || collectValues();
+        state.values = payload.values || submittedValues;
         renderGroups();
         updateRuntime(payload.runtime);
         setWarning(payload.warning || "");
@@ -1148,6 +1172,8 @@ class ControllerServer:
         self.port = port
         self.auto_open = auto_open
         self.runtime_manager = ControllerRuntimeManager()
+        self._secret_values_lock = threading.Lock()
+        self._session_secret_values: dict[str, str] = {}
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -1183,7 +1209,10 @@ class ControllerServer:
         thread = self._thread
         self._httpd = None
         self._thread = None
-        self.runtime_manager.close()
+        try:
+            self.runtime_manager.close()
+        finally:
+            self._clear_session_secret_values()
         if httpd is not None:
             httpd.shutdown()
             httpd.server_close()
@@ -1328,9 +1357,40 @@ class ControllerServer:
         }
 
     def _validate_values(self, values: dict[str, str | None]) -> dict[str, str | None]:
-        normalized = normalize_controller_values(values)
+        normalized = self._merge_session_secret_values(values)
         AppSettings.from_mapping(normalized)
+        self._remember_session_secret_values(normalized)
         return normalized
+
+    def _merge_session_secret_values(
+        self,
+        values: dict[str, str | None],
+    ) -> dict[str, str | None]:
+        normalized = normalize_controller_values(values)
+        with self._secret_values_lock:
+            cached_secret_values = dict(self._session_secret_values)
+        for env_name in _CONTROLLER_SECRET_ENV_NAMES:
+            submitted_value = normalized.get(env_name)
+            if submitted_value not in {None, ""}:
+                continue
+            cached_value = cached_secret_values.get(env_name)
+            normalized[env_name] = cached_value if cached_value not in {None, ""} else None
+        return normalized
+
+    def _remember_session_secret_values(
+        self,
+        values: dict[str, str | None],
+    ) -> None:
+        with self._secret_values_lock:
+            for env_name in _CONTROLLER_SECRET_ENV_NAMES:
+                value = values.get(env_name)
+                if value in {None, ""}:
+                    continue
+                self._session_secret_values[env_name] = value
+
+    def _clear_session_secret_values(self) -> None:
+        with self._secret_values_lock:
+            self._session_secret_values.clear()
 
     def _save_config_values(self, values: dict[str, str | None]) -> dict[str, str | None]:
         normalized = self._validate_values(values)

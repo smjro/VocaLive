@@ -50,7 +50,7 @@ Start the local browser controller from the source tree:
 PYTHONPATH=src python3 -m vocalive
 ```
 
-This opens a controller page in your default browser, stores non-secret settings in `.vocalive/controller-config.json`, and lets you start or stop the live runtime. Secret fields such as `VOCALIVE_GEMINI_API_KEY` are never written to disk and must be entered each time.
+This opens a controller page in your default browser, stores non-secret settings in `.vocalive/controller-config.json`, and lets you start or stop the live runtime. Secret fields such as `VOCALIVE_GEMINI_API_KEY` are never written to disk; the controller keeps them only in memory while it stays open, so you can restart the runtime without re-entering them until the controller exits.
 
 Windows PowerShell:
 
@@ -107,7 +107,7 @@ To use OpenAI STT instead of Moonshine, switch `VOCALIVE_STT_PROVIDER=openai` an
 `VOCALIVE_OPENAI_API_KEY` or `OPENAI_API_KEY`. The default OpenAI STT model is
 `gpt-4o-mini-transcribe`.
 
-If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved non-secret config, while secret fields must be re-entered.
+If you prefer the controller, launch `python -m vocalive` once and enter the same values in the browser UI; subsequent runs reuse the saved non-secret config, while secret fields stay only in the controller process memory and disappear when you close it.
 
 When AivisSpeech is installed locally, you can let VocaLive launch it directly by setting `VOCALIVE_AIVIS_ENGINE_MODE=cpu` or `gpu`. GPU mode starts the engine with `run(.exe) --use_gpu`. If your install lives outside the standard Windows/macOS path, set `VOCALIVE_AIVIS_ENGINE_PATH` to the engine `run(.exe)` path.
 If managed Aivis startup drives CPU usage too high, set `VOCALIVE_AIVIS_CPU_NUM_THREADS` to cap the engine worker threads.
