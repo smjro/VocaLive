@@ -27,6 +27,30 @@ from vocalive.config.settings import (
 )
 
 
+def _extract_markdown_table_rows(
+    path: Path,
+    *,
+    header: str,
+    end_marker: str,
+) -> dict[str, dict[str, str]]:
+    text = path.read_text(encoding="utf-8")
+    start = text.index(header)
+    end = text.index(end_marker, start)
+    lines = text[start:end].splitlines()[2:]
+
+    rows: dict[str, dict[str, str]] = {}
+    for line in lines:
+        parts = [part.strip() for part in line.strip().strip("|").split("|")]
+        if len(parts) != 3:
+            continue
+        env_name, default_label, description = parts
+        rows[env_name.strip("`")] = {
+            "default_label": default_label.strip("`"),
+            "description": description,
+        }
+    return rows
+
+
 class AppSettingsTests(unittest.TestCase):
     def test_from_mapping_matches_from_env(self) -> None:
         payload = {
@@ -579,21 +603,29 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_readme_configuration_table_matches_controller_setting_rows(self) -> None:
         readme_path = Path(__file__).resolve().parents[2] / "README.md"
-        text = readme_path.read_text(encoding="utf-8")
-        start = text.index("| Variable | Default | Purpose |")
-        end = text.index("\n\nCurrent provider support:")
-        lines = text[start:end].splitlines()[2:]
+        actual_rows = _extract_markdown_table_rows(
+            readme_path,
+            header="| Variable | Default | Purpose |",
+            end_marker="\n\nCurrent provider support:",
+        )
 
-        actual_rows: dict[str, dict[str, str]] = {}
-        for line in lines:
-            parts = [part.strip() for part in line.strip().strip("|").split("|")]
-            if len(parts) != 3:
-                continue
-            env_name, default_label, description = parts
-            actual_rows[env_name.strip("`")] = {
-                "default_label": default_label.strip("`"),
-                "description": description,
+        expected_rows = {
+            row["env_name"]: {
+                "default_label": row["default_label"],
+                "description": row["description"],
             }
+            for row in controller_setting_rows()
+        }
+
+        self.assertEqual(actual_rows, expected_rows)
+
+    def test_development_configuration_table_matches_controller_setting_rows(self) -> None:
+        development_path = Path(__file__).resolve().parents[2] / "docs" / "development.md"
+        actual_rows = _extract_markdown_table_rows(
+            development_path,
+            header="| Variable | Default | Notes |",
+            end_marker="\n\nIf you add a new setting",
+        )
 
         expected_rows = {
             row["env_name"]: {

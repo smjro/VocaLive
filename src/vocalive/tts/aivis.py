@@ -38,6 +38,7 @@ class AivisSpeechTextToSpeechEngine(TextToSpeechEngine):
         context: TurnContext,
         cancellation: CancellationToken | None = None,
     ) -> SynthesizedSpeech:
+        del context
         if cancellation is not None:
             cancellation.raise_if_cancelled()
         speaker_id = await asyncio.to_thread(self._resolve_speaker_id)
@@ -47,8 +48,7 @@ class AivisSpeechTextToSpeechEngine(TextToSpeechEngine):
         audio_bytes = await asyncio.to_thread(self._request_synthesis, audio_query, speaker_id)
         if cancellation is not None:
             cancellation.raise_if_cancelled()
-        sample_rate_hz, channels, sample_width_bytes = _read_wave_metadata(audio_bytes)
-        duration_ms = _read_wave_duration_ms(audio_bytes)
+        sample_rate_hz, channels, sample_width_bytes, duration_ms = _read_wave_info(audio_bytes)
         return SynthesizedSpeech(
             text=text,
             provider=self.name,
@@ -161,19 +161,14 @@ def _select_style(
 
 
 def _open_json(request: urllib.request.Request, timeout_seconds: float) -> Any:
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"AivisSpeech API request failed with status {exc.code}: {raw_body}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"AivisSpeech API request failed: {exc.reason}") from exc
+    return json.loads(_open_response_bytes(request=request, timeout_seconds=timeout_seconds))
 
 
 def _open_bytes(request: urllib.request.Request, timeout_seconds: float) -> bytes:
+    return _open_response_bytes(request=request, timeout_seconds=timeout_seconds)
+
+
+def _open_response_bytes(request: urllib.request.Request, timeout_seconds: float) -> bytes:
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return response.read()
@@ -186,18 +181,24 @@ def _open_bytes(request: urllib.request.Request, timeout_seconds: float) -> byte
         raise RuntimeError(f"AivisSpeech API request failed: {exc.reason}") from exc
 
 
-def _read_wave_metadata(audio_bytes: bytes) -> tuple[int, int, int]:
-    with wave.open(BytesIO(audio_bytes), "rb") as wav_file:
-        return (
-            wav_file.getframerate(),
-            wav_file.getnchannels(),
-            wav_file.getsampwidth(),
-        )
-
-
-def _read_wave_duration_ms(audio_bytes: bytes) -> float:
+def _read_wave_info(audio_bytes: bytes) -> tuple[int, int, int, float]:
     with wave.open(BytesIO(audio_bytes), "rb") as wav_file:
         frame_rate = wav_file.getframerate()
         if frame_rate <= 0:
             raise RuntimeError("AivisSpeech returned invalid WAV metadata: frame rate must be > 0")
-        return (wav_file.getnframes() / frame_rate) * 1000.0
+        return (
+            frame_rate,
+            wav_file.getnchannels(),
+            wav_file.getsampwidth(),
+            (wav_file.getnframes() / frame_rate) * 1000.0,
+        )
+
+
+def _read_wave_metadata(audio_bytes: bytes) -> tuple[int, int, int]:
+    sample_rate_hz, channels, sample_width_bytes, _ = _read_wave_info(audio_bytes)
+    return sample_rate_hz, channels, sample_width_bytes
+
+
+def _read_wave_duration_ms(audio_bytes: bytes) -> float:
+    _, _, _, duration_ms = _read_wave_info(audio_bytes)
+    return duration_ms
