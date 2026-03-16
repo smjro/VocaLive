@@ -21,6 +21,7 @@ from vocalive.config.settings import (
     AivisSpeechSettings,
     ApplicationAudioMode,
     ApplicationAudioSettings,
+    ConversationWindowSettings,
     InputProvider,
     InputSettings,
     OverlaySettings,
@@ -208,6 +209,48 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(captured_kwargs), 1)
         self.assertTrue(captured_kwargs[0]["speech_start_events_enabled"])
 
+    def test_build_audio_input_enables_application_audio_speech_events_for_conversation_window(
+        self,
+    ) -> None:
+        captured_kwargs: list[dict[str, object]] = []
+
+        class _FakeApplicationAudioInput:
+            def __init__(self, **kwargs) -> None:
+                captured_kwargs.append(kwargs)
+                self.kwargs = kwargs
+
+            async def start(self) -> str:
+                return "application audio"
+
+            def set_speech_start_handler(self, handler) -> None:
+                del handler
+
+            async def read(self) -> AudioSegment | None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        with patch("vocalive.runtime.sys.platform", "darwin"), patch(
+            "vocalive.runtime.application_audio_input_class_for_platform",
+            return_value=_FakeApplicationAudioInput,
+        ):
+            build_audio_input(
+                AppSettings(
+                    application_audio=ApplicationAudioSettings(
+                        enabled=True,
+                        target="Steam",
+                    ),
+                    conversation_window=ConversationWindowSettings(
+                        enabled=True,
+                        apply_to_application_audio=True,
+                    ),
+                )
+            )
+
+        self.assertEqual(len(captured_kwargs), 1)
+        self.assertTrue(captured_kwargs[0]["speech_start_events_enabled"])
+
     def test_build_audio_input_supports_windows_application_audio(self) -> None:
         with patch("vocalive.runtime.sys.platform", "win32"):
             audio_input = build_audio_input(
@@ -368,6 +411,7 @@ class _RecordingOrchestrator:
     def __init__(self) -> None:
         self.submitted: list[str | None] = []
         self.wait_for_idle_calls = 0
+        self.reset_reasons: list[str] = []
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
         self.submitted.append(segment.transcript_hint)
@@ -379,6 +423,20 @@ class _RecordingOrchestrator:
 
     async def wait_for_idle(self) -> None:
         self.wait_for_idle_calls += 1
+
+    async def reset_session_history(self, *, reason: str = "session_reset") -> None:
+        self.reset_reasons.append(reason)
+
+
+class _FakeClock:
+    def __init__(self, *values_ms: float) -> None:
+        self._values = list(values_ms)
+        self._last_value = values_ms[-1] if values_ms else 0.0
+
+    def __call__(self) -> float:
+        if self._values:
+            self._last_value = self._values.pop(0)
+        return self._last_value
 
 
 class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -399,6 +457,38 @@ class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.submitted, ["first", "second"])
         self.assertEqual(orchestrator.wait_for_idle_calls, 0)
         self.assertIsNotNone(audio_input.speech_start_handler)
+
+    async def test_microphone_loop_skips_segments_while_conversation_window_is_closed(self) -> None:
+        audio_input = _ScriptedMicrophoneInput(
+            [
+                AudioSegment.from_text("first"),
+                AudioSegment.from_text("second"),
+                None,
+            ]
+        )
+        orchestrator = _RecordingOrchestrator()
+        settings = AppSettings(
+            input=InputSettings(provider=InputProvider.MICROPHONE),
+            conversation_window=ConversationWindowSettings(
+                enabled=True,
+                open_duration_seconds=5.0,
+                closed_duration_seconds=20.0,
+                start_open=False,
+            ),
+        )
+        fake_clock = _FakeClock(0.0, 0.0, 21_000.0)
+
+        with patch("vocalive.conversation_window.monotonic_ms", new=fake_clock):
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = await _run_microphone_loop(
+                    orchestrator,
+                    audio_input,
+                    settings=settings,
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(orchestrator.submitted, ["second"])
+        self.assertEqual(orchestrator.reset_reasons, ["conversation_window_reopened"])
 
 
 class MainEntrypointTests(unittest.TestCase):

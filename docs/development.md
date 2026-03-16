@@ -47,7 +47,7 @@ The current entry point is `src/vocalive/main.py`.
 - live microphone or application-audio input currently requires a real STT adapter such as `moonshine` or `openai`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` layers application-audio capture on top of either `stdin` or `microphone`
 - `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; application-audio segments are transcribed and appended to session history without immediately triggering LLM/TTS
-- set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application audio to behave like a normal live turn and interrupt stale playback
+- set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application audio to behave like a normal live turn and trigger immediate assistant replies
 - application-audio turns are stored in session history as labeled application context, not as user messages
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
 - application-audio capture uses adaptive energy-based VAD by default and can fall back to fixed thresholding with `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false`
@@ -64,7 +64,9 @@ The current entry point is `src/vocalive/main.py`.
 - `/quit`, `quit`, and `exit` stop the stdin shell
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking; `VOCALIVE_MIC_INTERRUPT_MODE=always` stops stale playback on speech onset, while `explicit` waits for a finalized utterance that directly addresses the assistant
-- in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, so new app dialogue can stop stale playback immediately
+- `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; by default this applies to microphone speech only, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends it to application audio
+- when a closed conversation window reopens and the next live utterance is accepted, VocaLive resets the stored conversation/application history first so the new turn starts fresh instead of referencing the previous window
+- in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, but playback is interrupted only after a finalized app-audio transcript explicitly addresses the assistant
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
 - microphone reply suppression is enabled by default for low-value live chatter; explicit questions/requests still bypass the policy
@@ -124,6 +126,11 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
 | `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
 | `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always` interrupts active assistant speech on new user speech, `explicit` waits for a finalized utterance that directly calls the assistant, and `disabled` never interrupts early |
+| `VOCALIVE_CONVERSATION_WINDOW_ENABLED` | `false` | When enabled, live audio is only forwarded to STT during recurring conversation windows |
+| `VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS` | `20.0` | How long each conversation window stays open before live audio is skipped |
+| `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped between conversation windows |
+| `VOCALIVE_CONVERSATION_WINDOW_START_OPEN` | `true` | Start the runtime with the first conversation window already open |
+| `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO` | `false` | Apply conversation-window gating to application-audio STT as well as microphone speech |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
 | `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
 | `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |

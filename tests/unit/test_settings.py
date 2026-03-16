@@ -268,6 +268,54 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.input.silence_threshold_ms, 750.0)
         self.assertEqual(settings.input.interrupt_mode, MicrophoneInterruptMode.EXPLICIT)
 
+    def test_from_env_reads_conversation_window_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_CONVERSATION_WINDOW_ENABLED": "true",
+                "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS": "30",
+                "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS": "240",
+                "VOCALIVE_CONVERSATION_WINDOW_START_OPEN": "false",
+                "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO": "true",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertTrue(settings.conversation_window.enabled)
+        self.assertEqual(settings.conversation_window.open_duration_seconds, 30.0)
+        self.assertEqual(settings.conversation_window.closed_duration_seconds, 240.0)
+        self.assertFalse(settings.conversation_window.start_open)
+        self.assertTrue(settings.conversation_window.apply_to_application_audio)
+
+    def test_from_env_rejects_non_positive_conversation_window_open_seconds(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS": "0",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS",
+            ):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_negative_conversation_window_closed_seconds(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS",
+            ):
+                AppSettings.from_env()
+
     def test_from_env_allows_disabling_default_conversation_language(self) -> None:
         with patch.dict(
             os.environ,
@@ -525,6 +573,11 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_MIC_DEVICE",
             "VOCALIVE_MIC_PREFER_EXTERNAL",
             "VOCALIVE_MIC_INTERRUPT_MODE",
+            "VOCALIVE_CONVERSATION_WINDOW_ENABLED",
+            "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS",
+            "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS",
+            "VOCALIVE_CONVERSATION_WINDOW_START_OPEN",
+            "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO",
             "VOCALIVE_APP_AUDIO_ENABLED",
             "VOCALIVE_APP_AUDIO_MODE",
             "VOCALIVE_APP_AUDIO_TARGET",

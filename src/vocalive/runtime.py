@@ -5,6 +5,7 @@ import sys
 
 from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudioInput
 from vocalive.audio.output import MemoryAudioOutput, SpeakerAudioOutput, parse_playback_command
+from vocalive.conversation_window import ConversationWindowGate
 from vocalive.config.settings import (
     AppSettings,
     AivisEngineMode,
@@ -45,7 +46,7 @@ async def run_headless(settings: AppSettings) -> int:
         await orchestrator.start()
         if audio_input is None:
             return await run_stdin_shell(orchestrator)
-        return await run_microphone_loop(orchestrator, audio_input)
+        return await run_microphone_loop(orchestrator, audio_input, settings=settings)
     finally:
         if audio_input is not None:
             await audio_input.close()
@@ -195,6 +196,10 @@ def build_audio_input(settings: AppSettings) -> AudioInput | None:
                 adaptive_vad_enabled=settings.application_audio.adaptive_vad_enabled,
                 speech_start_events_enabled=(
                     settings.application_audio.mode is ApplicationAudioMode.RESPOND
+                    or (
+                        settings.conversation_window.enabled
+                        and settings.conversation_window.apply_to_application_audio
+                    )
                 ),
             )
         )
@@ -241,21 +246,29 @@ async def run_stdin_shell(orchestrator: ConversationOrchestrator) -> int:
 async def run_microphone_loop(
     orchestrator: ConversationOrchestrator,
     audio_input: AudioInput,
+    *,
+    settings: AppSettings | None = None,
 ) -> int:
-    audio_input.set_speech_start_handler(orchestrator.handle_user_speech_start)
+    resolved_settings = settings or AppSettings()
+    conversation_window = configure_live_audio_input(
+        audio_input,
+        orchestrator,
+        settings=resolved_settings,
+    )
     selected_input = await audio_input.start()
+    display_label = _format_live_input_label(selected_input, conversation_window)
     if selected_input:
-        print(f"VocaLive live audio mode. Using {selected_input}. Ctrl-C to exit.")
+        print(f"VocaLive live audio mode. Using {display_label}. Ctrl-C to exit.")
+    elif display_label:
+        print(f"VocaLive live audio mode. {display_label}. Ctrl-C to exit.")
     else:
         print("VocaLive live audio mode. Ctrl-C to exit.")
-    while True:
-        segment = await audio_input.read()
-        if segment is None:
-            return 0
-        accepted = await orchestrator.submit_utterance(segment)
-        if not accepted:
-            print("assistant> queue full, utterance dropped")
-            continue
+    return await forward_live_audio_segments(
+        audio_input,
+        orchestrator,
+        conversation_window=conversation_window,
+        print_queue_overflow=True,
+    )
 
 
 def uses_live_audio_input(settings: AppSettings) -> bool:
@@ -293,3 +306,54 @@ def screen_capture_engine_class_for_platform(platform: str):
 
 def _uses_live_audio_input(settings: AppSettings) -> bool:
     return uses_live_audio_input(settings)
+
+
+def configure_live_audio_input(
+    audio_input: AudioInput,
+    orchestrator: ConversationOrchestrator,
+    *,
+    settings: AppSettings,
+) -> ConversationWindowGate:
+    conversation_window = ConversationWindowGate(
+        settings.conversation_window,
+        session_id=settings.session_id,
+    )
+    audio_input.set_speech_start_handler(
+        conversation_window.wrap_speech_start_handler(orchestrator.handle_user_speech_start)
+    )
+    return conversation_window
+
+
+async def forward_live_audio_segments(
+    audio_input: AudioInput,
+    orchestrator: ConversationOrchestrator,
+    *,
+    conversation_window: ConversationWindowGate,
+    print_queue_overflow: bool = False,
+) -> int:
+    while True:
+        segment = await audio_input.read()
+        if segment is None:
+            return 0
+        if not conversation_window.should_forward_segment(segment):
+            continue
+        if conversation_window.consume_history_reset_request():
+            await orchestrator.reset_session_history(
+                reason="conversation_window_reopened"
+            )
+        accepted = await orchestrator.submit_utterance(segment)
+        if accepted or not print_queue_overflow:
+            continue
+        print("assistant> queue full, utterance dropped")
+
+
+def _format_live_input_label(
+    selected_input: str | None,
+    conversation_window: ConversationWindowGate,
+) -> str:
+    summary = conversation_window.summary()
+    if not selected_input:
+        return summary or ""
+    if summary is None:
+        return selected_input
+    return f"{selected_input} ({summary})"

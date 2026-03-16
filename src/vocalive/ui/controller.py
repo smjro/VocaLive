@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from vocalive.audio.input import AudioInput
+from vocalive.conversation_window import ConversationWindowGate
 from vocalive.config.controller_store import ControllerConfigStore
 from vocalive.config.settings import (
     AppSettings,
@@ -26,6 +27,8 @@ from vocalive.runtime import (
     build_managed_aivis_engine,
     build_orchestrator,
     build_overlay,
+    configure_live_audio_input,
+    forward_live_audio_segments,
 )
 from vocalive.tts.aivis_manager import ManagedAivisSpeechEngine
 from vocalive.ui.overlay import OverlayServer
@@ -953,10 +956,18 @@ class ControllerRuntimeManager:
                 if overlay is not None:
                     await overlay.start()
                 await orchestrator.start()
-                audio_input.set_speech_start_handler(orchestrator.handle_user_speech_start)
+                conversation_window = configure_live_audio_input(
+                    audio_input,
+                    orchestrator,
+                    settings=settings,
+                )
                 input_label = await audio_input.start()
                 reader_task = asyncio.create_task(
-                    self._reader_loop(audio_input, orchestrator),
+                    self._reader_loop(
+                        audio_input,
+                        orchestrator,
+                        conversation_window=conversation_window,
+                    ),
                     name="vocalive-controller-live-input",
                 )
                 self._active_runtime = _ActiveRuntime(
@@ -1023,14 +1034,16 @@ class ControllerRuntimeManager:
         self,
         audio_input: AudioInput,
         orchestrator: ConversationOrchestrator,
+        *,
+        conversation_window: ConversationWindowGate,
     ) -> None:
         error_message: str | None = None
         try:
-            while True:
-                segment = await audio_input.read()
-                if segment is None:
-                    break
-                await orchestrator.submit_utterance(segment)
+            await forward_live_audio_segments(
+                audio_input,
+                orchestrator,
+                conversation_window=conversation_window,
+            )
         except asyncio.CancelledError:
             return
         except Exception as exc:

@@ -123,10 +123,10 @@ The pipeline is built around a bounded user-turn queue plus a low-priority appli
 
 - queue capacity comes from `QueueSettings.ingress_maxsize`
 - overflow policy is explicit: `drop_oldest` or `reject_new`
-- `submit_utterance()` interrupts the currently active turn before queue insertion
+- `submit_utterance()` can interrupt the currently active turn before queue insertion, but explicit-mode microphone turns and application-audio turns first check whether the finalized transcript explicitly addresses the assistant while speech is active
 - application audio in `context_only` mode is routed into the low-priority queue and does not interrupt active playback or trigger LLM/TTS
 - microphone speech onset calls `handle_user_speech_start()` only when the configured mic interrupt mode still allows immediate barge-in
-- application-audio speech onset calls `handle_user_speech_start()` only in `respond` mode
+- application audio in `respond` mode keeps reading while the assistant is speaking, but it no longer interrupts on speech onset; only a finalized explicit assistant address can cut active playback
 - playback backends receive a `CancellationToken` and must stop quickly when a turn is cancelled
 - `drop_oldest` keeps the newest utterance by discarding the oldest queued item
 - `reject_new` preserves queued work and refuses the new utterance

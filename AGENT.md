@@ -55,7 +55,7 @@ The repository is not a blank prototype. These behaviors already exist and shoul
 2. The ingress queue is bounded and overflow behavior is explicit.
 3. Microphone speech start can interrupt stale playback before end-of-turn emission.
 4. Application-audio `context_only` mode commits app transcripts to session without immediately triggering LLM/TTS.
-5. `respond`-mode application audio can still interrupt stale playback like a live turn.
+5. `respond`-mode application audio can still trigger live turns, but it interrupts stale playback only when the finalized transcript explicitly addresses the assistant.
 6. Assistant responses are split into sentence-sized chunks for playback.
 7. TTS for the next sentence is prefetched while the current sentence is playing.
 8. User messages are committed to session history after STT.

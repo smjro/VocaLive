@@ -131,6 +131,27 @@ class ConversationOrchestrator:
         except asyncio.CancelledError:
             pass
 
+    async def reset_session_history(self, *, reason: str = "session_reset") -> None:
+        await self._discard_pending_live_segment()
+        await self._discard_pending_application_segment()
+        await self._interrupt_active_turn(reason=reason, force_stop_audio=True)
+        drained_conversation_count = _drain_queue(self._queue)
+        drained_application_count = _drain_queue(self._application_context_queue)
+        self.session = ConversationSession(session_id=self.session.session_id)
+        self._last_assistant_response_ms = None
+        self._last_application_audio_submission_ms = None
+        self._last_screen_observation_ms = None
+        self._last_screen_capture_fingerprint = None
+        self._set_idle_if_drained()
+        log_event(
+            self.logger,
+            "session_history_reset",
+            session_id=self.session.session_id,
+            reason=reason,
+            drained_conversation_count=drained_conversation_count,
+            drained_application_count=drained_application_count,
+        )
+
     async def submit_utterance(self, segment: AudioSegment) -> bool:
         if segment.source == "application_audio":
             return await self._submit_application_audio_segment(segment)
@@ -335,8 +356,7 @@ class ConversationOrchestrator:
     async def handle_user_speech_start(self, source: AudioSource = "user") -> None:
         if self._active_stage not in {"tts", "playback"}:
             return
-        if source == "application_audio":
-            await self._interrupt_active_turn(reason="speech_started")
+        if source != "user":
             return
         if self.settings.input.interrupt_mode is not MicrophoneInterruptMode.ALWAYS:
             return
@@ -872,6 +892,8 @@ class ConversationOrchestrator:
         self,
         segment: AudioSegment,
     ) -> tuple[AudioSegment, bool]:
+        if segment.source == "application_audio":
+            return await self._prepare_application_audio_segment_for_queue(segment)
         if not self._is_microphone_user_segment(segment):
             return segment, True
 
@@ -883,10 +905,18 @@ class ConversationOrchestrator:
         if self._active_stage not in {"tts", "playback"}:
             return segment, False
 
-        prepared_segment, should_interrupt = await self._probe_explicit_microphone_segment(segment)
+        prepared_segment, should_interrupt = await self._probe_explicit_interrupt_segment(segment)
         return prepared_segment, should_interrupt
 
-    async def _probe_explicit_microphone_segment(
+    async def _prepare_application_audio_segment_for_queue(
+        self,
+        segment: AudioSegment,
+    ) -> tuple[AudioSegment, bool]:
+        if self._active_stage not in {"tts", "playback"}:
+            return segment, False
+        return await self._probe_explicit_interrupt_segment(segment)
+
+    async def _probe_explicit_interrupt_segment(
         self,
         segment: AudioSegment,
     ) -> tuple[AudioSegment, bool]:
@@ -901,9 +931,10 @@ class ConversationOrchestrator:
             except Exception as exc:
                 log_event(
                     self.logger,
-                    "microphone_interrupt_probe_failed",
+                    "interrupt_probe_failed",
                     session_id=self.session.session_id,
                     stage=self._active_stage,
+                    audio_source=segment.source,
                     error=str(exc),
                 )
                 return segment, False
@@ -1083,6 +1114,16 @@ def _segment_duration_ms(segment: AudioSegment) -> float:
     if bytes_per_second <= 0 or not segment.pcm:
         return 0.0
     return (len(segment.pcm) / bytes_per_second) * 1000.0
+
+
+def _drain_queue(queue: BoundedAsyncQueue[AudioSegment]) -> int:
+    drained_count = 0
+    while True:
+        segment = queue.get_nowait()
+        if segment is None:
+            return drained_count
+        queue.task_done()
+        drained_count += 1
 
 
 def _split_response_for_playback(text: str) -> tuple[str, ...]:

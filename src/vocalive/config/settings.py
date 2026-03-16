@@ -219,6 +219,31 @@ CONTROLLER_SETTING_DEFINITIONS = (
         MicrophoneInterruptMode.ALWAYS.value,
         options=_enum_values(MicrophoneInterruptMode),
     ),
+    SettingDefinition("VOCALIVE_CONVERSATION_WINDOW_ENABLED", "input", "bool", "false"),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS",
+        "input",
+        "float",
+        "20.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS",
+        "input",
+        "float",
+        "180.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_WINDOW_START_OPEN",
+        "input",
+        "bool",
+        "true",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO",
+        "input",
+        "bool",
+        "false",
+    ),
     SettingDefinition("VOCALIVE_APP_AUDIO_ENABLED", "application_audio", "bool", "false"),
     SettingDefinition(
         "VOCALIVE_APP_AUDIO_MODE",
@@ -495,6 +520,27 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     ),
     "VOCALIVE_MIC_MAX_UTTERANCE_MS": SettingDocumentation(
         description="Hard cap for one buffered utterance"
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_ENABLED": SettingDocumentation(
+        description=(
+            "When enabled, live audio is only forwarded to STT during recurring conversation "
+            "windows"
+        )
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS": SettingDocumentation(
+        description="How long each conversation window stays open before live audio is skipped"
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS": SettingDocumentation(
+        description="How long live audio stays skipped between conversation windows"
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_START_OPEN": SettingDocumentation(
+        description="Start the runtime with the first conversation window already open"
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO": SettingDocumentation(
+        description=(
+            "Apply conversation-window gating to application-audio STT as well as microphone "
+            "speech"
+        )
     ),
     "VOCALIVE_APP_AUDIO_ENABLED": SettingDocumentation(
         description="Enables application-audio capture as an additional live input"
@@ -849,6 +895,15 @@ class InputSettings:
 
 
 @dataclass
+class ConversationWindowSettings:
+    enabled: bool = False
+    open_duration_seconds: float = 20.0
+    closed_duration_seconds: float = 180.0
+    start_open: bool = True
+    apply_to_application_audio: bool = False
+
+
+@dataclass
 class ApplicationAudioSettings:
     enabled: bool = False
     mode: ApplicationAudioMode = ApplicationAudioMode.CONTEXT_ONLY
@@ -968,6 +1023,9 @@ class AppSettings:
     conversation: ConversationSettings = field(default_factory=ConversationSettings)
     context: ContextSettings = field(default_factory=ContextSettings)
     input: InputSettings = field(default_factory=InputSettings)
+    conversation_window: ConversationWindowSettings = field(
+        default_factory=ConversationWindowSettings
+    )
     application_audio: ApplicationAudioSettings = field(default_factory=ApplicationAudioSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
@@ -985,6 +1043,14 @@ class AppSettings:
         if self.application_audio.transcription_cooldown_seconds < 0:
             raise ValueError(
                 "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS must be >= 0"
+            )
+        if self.conversation_window.open_duration_seconds <= 0:
+            raise ValueError(
+                "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS must be > 0"
+            )
+        if self.conversation_window.closed_duration_seconds < 0:
+            raise ValueError(
+                "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS must be >= 0"
             )
         if self.application_audio.transcription_debounce_ms < 0:
             raise ValueError(
@@ -1135,6 +1201,33 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_MIC_INTERRUPT_MODE",
                     default=MicrophoneInterruptMode.ALWAYS,
+                ),
+            ),
+            conversation_window=ConversationWindowSettings(
+                enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_ENABLED",
+                    default=False,
+                ),
+                open_duration_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS",
+                    default=20.0,
+                ),
+                closed_duration_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS",
+                    default=180.0,
+                ),
+                start_open=_read_bool(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_START_OPEN",
+                    default=True,
+                ),
+                apply_to_application_audio=_read_bool(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO",
+                    default=False,
                 ),
             ),
             application_audio=ApplicationAudioSettings(
