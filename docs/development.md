@@ -51,6 +51,8 @@ The current entry point is `src/vocalive/main.py`.
 - application-audio turns are stored in session history as labeled application context, not as user messages
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
 - application-audio capture uses adaptive energy-based VAD by default and can fall back to fixed thresholding with `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD=false`
+- `VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS` lets nearby app-audio segments merge into one STT request before context is committed
+- `VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS` skips very short merged app-audio clips before STT runs, which is useful with paid STT backends
 - Moonshine applies low-frequency-preserving speech enhancement to application-audio segments before transcription unless `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false`; this path is only used when `VOCALIVE_STT_PROVIDER=moonshine`
 - `VOCALIVE_OUTPUT_PROVIDER=speaker` currently requires `VOCALIVE_TTS_PROVIDER=aivis`
 - `VOCALIVE_AIVIS_ENGINE_MODE=cpu` or `gpu` makes VocaLive launch the local AivisSpeech engine automatically; GPU mode uses `run(.exe) --use_gpu`
@@ -122,6 +124,9 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250` | Minimum buffered application audio before turn-end emission is allowed |
 | `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000` | Hard cap for one buffered application-audio utterance |
 | `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10` | Timeout for app lookup and helper startup/build |
+| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` | `0.0` | Minimum delay between accepted application-audio utterances before STT runs again |
+| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS` | `0.0` | Delay before application-audio STT runs so nearby segments can merge into one request |
+| `VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS` | `0.0` | Minimum merged application-audio duration required before STT is attempted |
 | `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
 | `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_STT_PROVIDER` | `mock` | `moonshine` and `openai` are supported; aliases such as `moonshine voice` and `gpt-4o-mini-transcribe` are accepted |

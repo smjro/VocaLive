@@ -38,13 +38,16 @@ _PROVIDER_ALIASES = {
 
 DEFAULT_GEMINI_SYSTEM_INSTRUCTION = (
     "You are VocaLive's conversation character, and your name is コハク. "
-    "Use a surreal, low-energy, deadpan-comic persona inspired by the overall vibe of Kamiusagi Rope. "
-    "Do not copy character names, world details, catchphrases, or existing lines. "
-    "Avoid generic AI-assistant phrasing, stiff disclaimers, and over-explaining. "
+    "Use an understated, low-energy, deadpan-comic conversation style inspired by the overall vibe of Kamiusagi Rope. "
+    "Do not copy character names, world details, catchphrases, running bits, or existing lines. "
+    "Speak like a familiar companion chatting beside the user: casual, dry, slightly blunt in a friendly way, and never theatrical. "
+    "Prefer compact spoken Japanese with everyday wording over formal written prose. "
+    "Keep replies short, usually one to three brief sentences, unless the user clearly needs more. "
+    "Answer or react to the user's actual point first, then if it fits add one small sideways observation or mild tsukkomi. "
+    "It is fine to be a little surreal or offbeat, but do not force jokes every turn. "
+    "Avoid generic AI-assistant phrasing, stiff disclaimers, praise-heavy cheerleading, and over-explaining. "
     "Do not start replies by addressing the user by name unless they clearly ask for that or it is needed for clarity. "
-    "Keep replies short, natural, conversational, and slightly offbeat. "
-    "Answer the user's actual question first, then if helpful add one dry sideways observation. "
-    "Stay coherent and helpful rather than turning nonsense into the main point."
+    "Stay coherent, helpful, and grounded even when the tone is playful."
 )
 DEFAULT_SCREEN_TRIGGER_PHRASES = (
     "画面みて",
@@ -273,6 +276,18 @@ CONTROLLER_SETTING_DEFINITIONS = (
     ),
     SettingDefinition(
         "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+        "application_audio",
+        "float",
+        "0.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS",
+        "application_audio",
+        "float",
+        "0.0",
+    ),
+    SettingDefinition(
+        "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS",
         "application_audio",
         "float",
         "0.0",
@@ -533,7 +548,18 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS": SettingDocumentation(
         description=(
             "Minimum delay between accepted application-audio utterances before STT runs "
-            "again; increase this to reduce Moonshine CPU load on continuous media"
+            "again; increase this to reduce continuous application-audio transcription load"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS": SettingDocumentation(
+        description=(
+            "Delay before application-audio STT runs so nearby segments can merge into one "
+            "transcription request"
+        )
+    ),
+    "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS": SettingDocumentation(
+        description=(
+            "Minimum merged application-audio duration required before STT is attempted"
         )
     ),
     "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD": SettingDocumentation(
@@ -838,6 +864,8 @@ class ApplicationAudioSettings:
     max_utterance_ms: float = 15_000.0
     timeout_seconds: float = 10.0
     transcription_cooldown_seconds: float = 0.0
+    transcription_debounce_ms: float = 0.0
+    min_transcription_duration_ms: float = 0.0
     adaptive_vad_enabled: bool = True
     stt_enhancement_enabled: bool = True
 
@@ -957,6 +985,14 @@ class AppSettings:
         if self.application_audio.transcription_cooldown_seconds < 0:
             raise ValueError(
                 "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS must be >= 0"
+            )
+        if self.application_audio.transcription_debounce_ms < 0:
+            raise ValueError(
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS must be >= 0"
+            )
+        if self.application_audio.min_transcription_duration_ms < 0:
+            raise ValueError(
+                "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS must be >= 0"
             )
         if self.aivis.cpu_num_threads is not None and self.aivis.cpu_num_threads < 1:
             raise ValueError(
@@ -1170,6 +1206,16 @@ class AppSettings:
                 transcription_cooldown_seconds=_read_float(
                     mapping,
                     "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+                    default=0.0,
+                ),
+                transcription_debounce_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS",
+                    default=0.0,
+                ),
+                min_transcription_duration_ms=_read_float(
+                    mapping,
+                    "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS",
                     default=0.0,
                 ),
                 adaptive_vad_enabled=_read_bool(

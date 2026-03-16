@@ -38,6 +38,7 @@ from vocalive.models import (
     ConversationRequest,
     ConversationTextPart,
     SynthesizedSpeech,
+    Transcription,
     TurnContext,
 )
 from vocalive.pipeline.events import ConversationEvent, ConversationEventSink
@@ -109,6 +110,7 @@ class RecordingTextToSpeechEngine(TextToSpeechEngine):
             duration_ms=max(320.0, len(text) * 70.0),
         )
 
+
 class RecordingEventSink(ConversationEventSink):
     def __init__(self) -> None:
         self.events: list[ConversationEvent] = []
@@ -145,6 +147,62 @@ class CancelledScreenCaptureEngine(ScreenCaptureEngine):
     ) -> ConversationInlineDataPart:
         del context, cancellation
         raise TurnCancelledError("turn cancelled")
+
+
+class CountingSpeechToTextEngine(MockSpeechToTextEngine):
+    name = "counting-stt"
+
+    def __init__(
+        self,
+        *,
+        text_resolver: Callable[[AudioSegment], str] | None = None,
+    ) -> None:
+        super().__init__(delay_seconds=0.0)
+        self.text_resolver = text_resolver
+        self.transcribe_call_count = 0
+        self.backend_call_count = 0
+
+    async def transcribe(
+        self,
+        segment: AudioSegment,
+        context: TurnContext,
+        cancellation: CancellationToken | None = None,
+    ) -> Transcription:
+        del context
+        self.transcribe_call_count += 1
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+        text = segment.transcript_hint
+        if not text:
+            self.backend_call_count += 1
+            if self.text_resolver is not None:
+                text = self.text_resolver(segment)
+            else:
+                text = segment.pcm.decode("utf-8", errors="ignore").strip()
+        if not text:
+            raise ValueError("counting STT needs transcript_hint or a text resolver")
+        return Transcription(text=text, provider=self.name, confidence=1.0, language="ja")
+
+
+def _pcm_silence(duration_ms: float, *, sample_rate_hz: int = 16_000) -> bytes:
+    frame_count = max(1, int(sample_rate_hz * duration_ms / 1000.0))
+    return b"\0\0" * frame_count
+
+
+def _raw_audio_segment(
+    duration_ms: float,
+    *,
+    source: str = "user",
+    source_label: str | None = None,
+) -> AudioSegment:
+    return AudioSegment(
+        pcm=_pcm_silence(duration_ms),
+        sample_rate_hz=16_000,
+        channels=1,
+        sample_width_bytes=2,
+        source=source,
+        source_label=source_label,
+    )
 
 
 class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
@@ -398,6 +456,46 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(output.stop_calls, 1)
         self.assertNotIn("Assistant: first", output.completed_texts)
+        self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
+
+    async def test_explicit_interrupt_probe_reuses_transcription_for_turn_processing(self) -> None:
+        stt_engine = CountingSpeechToTextEngine(
+            text_resolver=lambda segment: "コハク、どうする？" if segment.source == "user" else "ignored"
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=stt_engine,
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        accepted = await orchestrator.submit_utterance(_raw_audio_segment(800.0))
+        self.assertTrue(accepted)
+        await orchestrator.wait_for_idle()
+
+        self.assertEqual(stt_engine.backend_call_count, 1)
+        self.assertEqual(stt_engine.transcribe_call_count, 3)
         self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
 
     async def test_conversation_language_instruction_is_included_for_llm(self) -> None:
@@ -980,6 +1078,97 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             [
                 ("application", "Application audio (Steam): first clip"),
             ],
+        )
+        self.assertEqual(language_model.requests, [])
+
+    async def test_short_application_audio_segment_is_skipped_before_stt(self) -> None:
+        stt_engine = CountingSpeechToTextEngine(text_resolver=lambda segment: "ignored")
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                application_audio=ApplicationAudioSettings(
+                    min_transcription_duration_ms=500.0,
+                ),
+            ),
+            stt_engine=stt_engine,
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                _raw_audio_segment(
+                    220.0,
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(stt_engine.backend_call_count, 0)
+        self.assertEqual(orchestrator.session.snapshot(), ())
+        self.assertEqual(language_model.requests, [])
+
+    async def test_application_audio_segments_are_merged_before_transcription_when_debounced(self) -> None:
+        stt_engine = CountingSpeechToTextEngine(
+            text_resolver=lambda segment: f"merged-{len(segment.pcm)}"
+        )
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                application_audio=ApplicationAudioSettings(
+                    transcription_debounce_ms=40.0,
+                    min_transcription_duration_ms=700.0,
+                ),
+            ),
+            stt_engine=stt_engine,
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                _raw_audio_segment(
+                    320.0,
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await asyncio.sleep(0.01)
+            accepted = await orchestrator.submit_utterance(
+                _raw_audio_segment(
+                    420.0,
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(stt_engine.backend_call_count, 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [("application", f"Application audio (Steam): merged-{len(_pcm_silence(320.0)) + len(_pcm_silence(420.0))}")],
         )
         self.assertEqual(language_model.requests, [])
 

@@ -153,7 +153,7 @@ Application-audio notes:
 - application-audio utterances go through STT like live user audio, but session history stores them as labeled application context such as `Application audio (Steam): ...`
 - default application-audio tuning keeps more preroll and trailing context so phrase starts and endings are less likely to clip; raise `VOCALIVE_APP_AUDIO_PRE_SPEECH_MS`, `VOCALIVE_APP_AUDIO_SPEECH_HOLD_MS`, or `VOCALIVE_APP_AUDIO_SILENCE_MS` further if one app still cuts too aggressively
 - Moonshine applies low-frequency-preserving enhancement with a gentle presence boost, soft gate, short edge padding, and normalization to application audio before STT by default; this is only used when `VOCALIVE_STT_PROVIDER=moonshine`, and `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT=false` disables it
-- if continuous app audio keeps Moonshine busy, set `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` to accept app utterances less often
+- if continuous app audio is too chatty, combine `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS`, `VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS`, and `VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS` so nearby clips merge and very short clips are skipped before STT
 - in `respond` mode, application-audio speech start also interrupts stale assistant playback before the buffered utterance is fully emitted
 - app lookup and capture rely on a small platform helper that is built on first use; macOS uses ScreenCaptureKit via `swiftc`, and Windows uses a C# helper via `csc.exe`
 - on Windows, capture uses WASAPI process loopback for the selected process tree, so other audible apps or VocaLive speaker playback on the same output device are excluded; this requires a Windows build with process-loopback support
@@ -238,7 +238,9 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered application audio before end-of-turn detection may emit |
 | `VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered application-audio utterance |
 | `VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS` | `10.0` | Timeout for application lookup, helper startup, and helper build floor |
-| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` | `0.0` | Minimum delay between accepted application-audio utterances before STT runs again; increase this to reduce Moonshine CPU load on continuous media |
+| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS` | `0.0` | Minimum delay between accepted application-audio utterances before STT runs again; increase this to reduce continuous application-audio transcription load |
+| `VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS` | `0.0` | Delay before application-audio STT runs so nearby segments can merge into one transcription request |
+| `VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS` | `0.0` | Minimum merged application-audio duration required before STT is attempted |
 | `VOCALIVE_APP_AUDIO_ADAPTIVE_VAD` | `true` | Enables adaptive energy-based VAD for application audio; `false` falls back to fixed thresholding |
 | `VOCALIVE_APP_AUDIO_STT_ENHANCEMENT` | `true` | Enables lightweight application-audio speech enhancement before Moonshine STT |
 | `VOCALIVE_OUTPUT_PROVIDER` | `memory` | `memory` or `speaker` |

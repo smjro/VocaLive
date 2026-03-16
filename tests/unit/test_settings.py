@@ -122,12 +122,16 @@ class AppSettingsTests(unittest.TestCase):
             os.environ,
             {
                 "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS": "2.5",
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS": "1200",
+                "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS": "800",
             },
             clear=True,
         ):
             settings = AppSettings.from_env()
 
         self.assertEqual(settings.application_audio.transcription_cooldown_seconds, 2.5)
+        self.assertEqual(settings.application_audio.transcription_debounce_ms, 1200.0)
+        self.assertEqual(settings.application_audio.min_transcription_duration_ms, 800.0)
 
     def test_from_env_rejects_negative_application_audio_transcription_cooldown(self) -> None:
         with patch.dict(
@@ -140,6 +144,34 @@ class AppSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+            ):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_negative_application_audio_transcription_debounce(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS",
+            ):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_negative_application_audio_min_transcription_duration(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS",
             ):
                 AppSettings.from_env()
 
@@ -319,6 +351,8 @@ class AppSettingsTests(unittest.TestCase):
                 "VOCALIVE_APP_AUDIO_MIN_UTTERANCE_MS": "320",
                 "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS": "9000",
                 "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS": "12.5",
+                "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS": "900",
+                "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS": "700",
                 "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD": "false",
                 "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT": "false",
             },
@@ -339,6 +373,8 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.application_audio.min_utterance_ms, 320.0)
         self.assertEqual(settings.application_audio.max_utterance_ms, 9000.0)
         self.assertEqual(settings.application_audio.timeout_seconds, 12.5)
+        self.assertEqual(settings.application_audio.transcription_debounce_ms, 900.0)
+        self.assertEqual(settings.application_audio.min_transcription_duration_ms, 700.0)
         self.assertFalse(settings.application_audio.adaptive_vad_enabled)
         self.assertFalse(settings.application_audio.stt_enhancement_enabled)
 
@@ -413,6 +449,8 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.application_audio.pre_speech_ms, 200.0)
         self.assertEqual(settings.application_audio.speech_hold_ms, 320.0)
         self.assertEqual(settings.application_audio.silence_threshold_ms, 650.0)
+        self.assertEqual(settings.application_audio.transcription_debounce_ms, 0.0)
+        self.assertEqual(settings.application_audio.min_transcription_duration_ms, 0.0)
         self.assertTrue(settings.application_audio.adaptive_vad_enabled)
         self.assertTrue(settings.application_audio.stt_enhancement_enabled)
 
@@ -477,6 +515,8 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_APP_AUDIO_MAX_UTTERANCE_MS",
             "VOCALIVE_APP_AUDIO_TIMEOUT_SECONDS",
             "VOCALIVE_APP_AUDIO_TRANSCRIPTION_COOLDOWN_SECONDS",
+            "VOCALIVE_APP_AUDIO_TRANSCRIPTION_DEBOUNCE_MS",
+            "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS",
             "VOCALIVE_APP_AUDIO_ADAPTIVE_VAD",
             "VOCALIVE_APP_AUDIO_STT_ENHANCEMENT",
             "VOCALIVE_OUTPUT_PROVIDER",
