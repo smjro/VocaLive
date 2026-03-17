@@ -141,7 +141,7 @@ Microphone tuning notes:
 - microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
 - in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant, and `disabled` turns early microphone barge-in off
 - `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; after each closed interval, the next user speech starts the next open window, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends the gating itself to application audio
-- when a closed conversation window reopens and the next live utterance is accepted, VocaLive resets the stored conversation/application history first so the new turn starts fresh instead of referencing the previous window
+- `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY=clear` keeps the previous behavior of starting fresh on reopen; `resume_summary` uses a neutral Gemini pass to prepare a carry-forward resume note during the closed interval and injects that note into the next window instead
 
 Application-audio notes:
 
@@ -232,6 +232,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped before the next user speech may reopen the window |
 | `VOCALIVE_CONVERSATION_WINDOW_START_OPEN` | `true` | Start the runtime with the first conversation window already open |
 | `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO` | `false` | Apply conversation-window gating to application-audio STT as well as microphone speech |
+| `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY` | `clear` | History handling when a closed conversation window reopens: `clear` starts a fresh session, while `resume_summary` carries forward an LLM-written resume note with durable goals and constraints |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
 | `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
 | `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |

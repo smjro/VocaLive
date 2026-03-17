@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 
 from vocalive.audio.input import AudioInput, CombinedAudioInput, MicrophoneAudioInput
@@ -10,6 +11,7 @@ from vocalive.config.settings import (
     AppSettings,
     AivisEngineMode,
     ApplicationAudioMode,
+    ConversationWindowResetPolicy,
     InputProvider,
     OutputProvider,
 )
@@ -18,6 +20,7 @@ from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
 from vocalive.pipeline.events import ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
+from vocalive.pipeline.resume_summary import ConversationResumeSummarizer
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
 from vocalive.stt.openai import OpenAITranscriptionSpeechToTextEngine
@@ -95,6 +98,23 @@ def build_orchestrator(
         )
     else:
         language_model = EchoLanguageModel()
+    resume_summarizer = None
+    if settings.conversation_window.reset_policy is ConversationWindowResetPolicy.RESUME_SUMMARY:
+        if settings.model_provider != "gemini":
+            raise ValueError(
+                "conversation-window resume summaries currently require "
+                "VOCALIVE_MODEL_PROVIDER=gemini"
+            )
+        resume_summarizer = ConversationResumeSummarizer(
+            GeminiLanguageModel(
+                api_key=settings.gemini.api_key,
+                model_name=settings.gemini.model_name,
+                timeout_seconds=settings.gemini.timeout_seconds,
+                temperature=0.0,
+                thinking_budget=None,
+                system_instruction=None,
+            )
+        )
     if settings.tts_provider == "aivis":
         tts_engine = AivisSpeechTextToSpeechEngine(
             base_url=settings.aivis.base_url,
@@ -143,6 +163,7 @@ def build_orchestrator(
         audio_output=audio_output,
         event_sink=event_sink,
         screen_capture_engine=screen_capture_engine,
+        resume_summarizer=resume_summarizer,
     )
 
 
@@ -255,6 +276,10 @@ async def run_microphone_loop(
         orchestrator,
         settings=resolved_settings,
     )
+    monitor_task = _maybe_start_conversation_window_monitor(
+        orchestrator,
+        conversation_window=conversation_window,
+    )
     selected_input = await audio_input.start()
     display_label = _format_live_input_label(selected_input, conversation_window)
     if selected_input:
@@ -263,12 +288,18 @@ async def run_microphone_loop(
         print(f"VocaLive live audio mode. {display_label}. Ctrl-C to exit.")
     else:
         print("VocaLive live audio mode. Ctrl-C to exit.")
-    return await forward_live_audio_segments(
-        audio_input,
-        orchestrator,
-        conversation_window=conversation_window,
-        print_queue_overflow=True,
-    )
+    try:
+        return await forward_live_audio_segments(
+            audio_input,
+            orchestrator,
+            conversation_window=conversation_window,
+            print_queue_overflow=True,
+        )
+    finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
 
 
 def uses_live_audio_input(settings: AppSettings) -> bool:
@@ -338,13 +369,39 @@ async def forward_live_audio_segments(
         if not conversation_window.should_forward_segment(segment):
             continue
         if conversation_window.consume_history_reset_request():
-            await orchestrator.reset_session_history(
+            await orchestrator.handle_conversation_window_reopened(
                 reason="conversation_window_reopened"
             )
         accepted = await orchestrator.submit_utterance(segment)
         if accepted or not print_queue_overflow:
             continue
         print("assistant> queue full, utterance dropped")
+
+
+def _maybe_start_conversation_window_monitor(
+    orchestrator: ConversationOrchestrator,
+    *,
+    conversation_window: ConversationWindowGate,
+) -> asyncio.Task[None] | None:
+    if not conversation_window.enabled:
+        return None
+    return asyncio.create_task(
+        _monitor_conversation_window(orchestrator, conversation_window=conversation_window),
+        name="vocalive-conversation-window-monitor",
+    )
+
+
+async def _monitor_conversation_window(
+    orchestrator: ConversationOrchestrator,
+    *,
+    conversation_window: ConversationWindowGate,
+) -> None:
+    while True:
+        await asyncio.sleep(1.0)
+        conversation_window.poll_state()
+        if not conversation_window.consume_resume_summary_capture_request():
+            continue
+        await orchestrator.prepare_conversation_window_resume_summary()
 
 
 def _format_live_input_label(

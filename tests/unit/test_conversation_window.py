@@ -48,6 +48,7 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(gate.should_forward_segment(AudioSegment.from_text("open")))
         clock.set_ms(10_000.0)
         self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("closed")))
+        self.assertTrue(gate.consume_resume_summary_capture_request())
         clock.set_ms(30_000.0)
         self.assertFalse(gate.should_forward_segment(AudioSegment.from_text("still closed")))
         self.assertFalse(gate.consume_history_reset_request())
@@ -194,6 +195,23 @@ class ConversationWindowGateTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
         )
+
+    async def test_poll_state_marks_resume_summary_capture_when_window_closes(self) -> None:
+        clock = _FakeClock()
+        gate = ConversationWindowGate(
+            ConversationWindowSettings(
+                enabled=True,
+                open_duration_seconds=5.0,
+                closed_duration_seconds=20.0,
+            ),
+            now_ms=clock,
+        )
+
+        self.assertTrue(gate.poll_state())
+        clock.set_ms(5_000.0)
+
+        self.assertFalse(gate.poll_state())
+        self.assertTrue(gate.consume_resume_summary_capture_request())
 
     async def test_summary_describes_window_configuration(self) -> None:
         gate = ConversationWindowGate(

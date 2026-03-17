@@ -65,7 +65,7 @@ The current entry point is `src/vocalive/main.py`.
 - the stdin shell waits for the orchestrator to become idle, then prints the last committed assistant message
 - the microphone loop keeps reading while the assistant is speaking; `VOCALIVE_MIC_INTERRUPT_MODE=always` stops stale playback on speech onset, while `explicit` waits for a finalized utterance that directly addresses the assistant
 - `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; after each closed interval, the next user speech starts the next open window, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends the gating itself to application audio
-- when a closed conversation window reopens and the next live utterance is accepted, VocaLive resets the stored conversation/application history first so the new turn starts fresh instead of referencing the previous window
+- `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY=clear` keeps the previous behavior of starting fresh on reopen; `resume_summary` uses a neutral Gemini pass to prepare a carry-forward resume note during the closed interval and injects that note into the next window instead
 - in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, but playback is interrupted only after a finalized app-audio transcript explicitly addresses the assistant
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
@@ -131,6 +131,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped before the next user speech may reopen the window |
 | `VOCALIVE_CONVERSATION_WINDOW_START_OPEN` | `true` | Start the runtime with the first conversation window already open |
 | `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO` | `false` | Apply conversation-window gating to application-audio STT as well as microphone speech |
+| `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY` | `clear` | History handling when a closed conversation window reopens: `clear` starts a fresh session, while `resume_summary` carries forward an LLM-written resume note with durable goals and constraints |
 | `VOCALIVE_APP_AUDIO_ENABLED` | `false` | Enables application-audio capture as an additional live input |
 | `VOCALIVE_APP_AUDIO_MODE` | `context_only` | `context_only` stores app transcripts in session without immediate assistant replies; `respond` makes app audio behave like normal live turns |
 | `VOCALIVE_APP_AUDIO_TARGET` | unset | Required application selector; on macOS it matches application name first then bundle identifier, and on Windows it matches process name, executable path, or main window title |

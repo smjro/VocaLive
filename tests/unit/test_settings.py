@@ -16,6 +16,7 @@ from vocalive.config.settings import (
     AppSettings,
     AivisEngineMode,
     ApplicationAudioMode,
+    ConversationWindowResetPolicy,
     DEFAULT_GEMINI_SYSTEM_INSTRUCTION,
     DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES,
     DEFAULT_SCREEN_TRIGGER_PHRASES,
@@ -223,6 +224,19 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertEqual(settings.gemini.thinking_budget, 32)
+
+    def test_from_env_reads_conversation_window_reset_policy(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY": "resume_summary"},
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertEqual(
+            settings.conversation_window.reset_policy,
+            ConversationWindowResetPolicy.RESUME_SUMMARY,
+        )
 
     def test_from_env_parses_microphone_device_and_external_preference(self) -> None:
         with patch.dict(
@@ -512,6 +526,10 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.reply.min_gap_ms, 6000.0)
         self.assertEqual(settings.reply.short_utterance_max_chars, 12)
         self.assertEqual(settings.input.interrupt_mode, MicrophoneInterruptMode.ALWAYS)
+        self.assertEqual(
+            settings.conversation_window.reset_policy,
+            ConversationWindowResetPolicy.CLEAR,
+        )
         self.assertFalse(settings.application_audio.enabled)
         self.assertEqual(
             settings.application_audio.mode,
@@ -578,6 +596,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS",
             "VOCALIVE_CONVERSATION_WINDOW_START_OPEN",
             "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO",
+            "VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY",
             "VOCALIVE_APP_AUDIO_ENABLED",
             "VOCALIVE_APP_AUDIO_MODE",
             "VOCALIVE_APP_AUDIO_TARGET",

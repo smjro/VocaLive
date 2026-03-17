@@ -38,6 +38,7 @@ class ConversationWindowGate:
         self._drop_next_segment_sources: set[AudioSource] = set()
         self._last_reported_is_open: bool | None = None
         self._history_reset_pending = False
+        self._resume_summary_capture_pending = False
 
     @property
     def enabled(self) -> bool:
@@ -117,6 +118,15 @@ class ConversationWindowGate:
         self._history_reset_pending = False
         return True
 
+    def consume_resume_summary_capture_request(self) -> bool:
+        if not self._resume_summary_capture_pending:
+            return False
+        self._resume_summary_capture_pending = False
+        return True
+
+    def poll_state(self) -> bool:
+        return self._window_is_open(self._now_ms())
+
     def _applies_to_source(self, source: AudioSource) -> bool:
         if not self.enabled:
             return False
@@ -134,6 +144,8 @@ class ConversationWindowGate:
             self._last_reported_is_open = is_open
             if is_open:
                 self._history_reset_pending = True
+            else:
+                self._resume_summary_capture_pending = True
             log_event(
                 self._logger,
                 "conversation_window_state_changed",

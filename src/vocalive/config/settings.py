@@ -85,6 +85,11 @@ class MicrophoneInterruptMode(str, Enum):
     DISABLED = "disabled"
 
 
+class ConversationWindowResetPolicy(str, Enum):
+    CLEAR = "clear"
+    RESUME_SUMMARY = "resume_summary"
+
+
 class OutputProvider(str, Enum):
     MEMORY = "memory"
     SPEAKER = "speaker"
@@ -243,6 +248,13 @@ CONTROLLER_SETTING_DEFINITIONS = (
         "input",
         "bool",
         "false",
+    ),
+    SettingDefinition(
+        "VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY",
+        "input",
+        "enum",
+        ConversationWindowResetPolicy.CLEAR.value,
+        options=_enum_values(ConversationWindowResetPolicy),
     ),
     SettingDefinition("VOCALIVE_APP_AUDIO_ENABLED", "application_audio", "bool", "false"),
     SettingDefinition(
@@ -540,6 +552,13 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
         description=(
             "Apply conversation-window gating to application-audio STT as well as microphone "
             "speech"
+        )
+    ),
+    "VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY": SettingDocumentation(
+        description=(
+            "History handling when a closed conversation window reopens: `clear` starts a "
+            "fresh session, while `resume_summary` carries forward an LLM-written resume note "
+            "with durable goals and constraints"
         )
     ),
     "VOCALIVE_APP_AUDIO_ENABLED": SettingDocumentation(
@@ -901,6 +920,7 @@ class ConversationWindowSettings:
     closed_duration_seconds: float = 180.0
     start_open: bool = True
     apply_to_application_audio: bool = False
+    reset_policy: ConversationWindowResetPolicy = ConversationWindowResetPolicy.CLEAR
 
 
 @dataclass
@@ -1228,6 +1248,11 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO",
                     default=False,
+                ),
+                reset_policy=_read_conversation_window_reset_policy(
+                    mapping,
+                    "VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY",
+                    default=ConversationWindowResetPolicy.CLEAR,
                 ),
             ),
             application_audio=ApplicationAudioSettings(
@@ -1711,6 +1736,31 @@ def _read_microphone_interrupt_mode(
             f"Supported values: {supported_values}"
         )
     return mode
+
+
+def _read_conversation_window_reset_policy(
+    mapping: Mapping[str, str | None],
+    name: str,
+    default: ConversationWindowResetPolicy,
+) -> ConversationWindowResetPolicy:
+    raw_value = _lookup_raw(mapping, name)
+    if raw_value is None:
+        return default
+    normalized_value = "_".join(raw_value.strip().lower().replace("-", " ").split())
+    aliases = {
+        "clear": ConversationWindowResetPolicy.CLEAR,
+        "resume_summary": ConversationWindowResetPolicy.RESUME_SUMMARY,
+        "summary": ConversationWindowResetPolicy.RESUME_SUMMARY,
+        "resume": ConversationWindowResetPolicy.RESUME_SUMMARY,
+    }
+    policy = aliases.get(normalized_value)
+    if policy is None:
+        supported_values = ", ".join(policy.value for policy in ConversationWindowResetPolicy)
+        raise ValueError(
+            f"Unsupported conversation window reset policy: {raw_value!r}. "
+            f"Supported values: {supported_values}"
+        )
+    return policy
 
 
 def normalize_controller_values(

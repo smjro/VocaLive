@@ -20,6 +20,8 @@ from vocalive.config.settings import (
     ApplicationAudioMode,
     ApplicationAudioSettings,
     ConversationSettings,
+    ConversationWindowResetPolicy,
+    ConversationWindowSettings,
     ContextSettings,
     InputProvider,
     InputSettings,
@@ -78,6 +80,23 @@ class StaticLanguageModel(LanguageModel):
         cancellation: CancellationToken | None = None,
     ) -> AssistantResponse:
         return AssistantResponse(text=self.response_text, provider="static")
+
+
+class StubResumeSummarizer:
+    def __init__(self, summary_text: str | None) -> None:
+        self.summary_text = summary_text
+        self.calls: list[tuple[str, float, tuple[str, ...]]] = []
+
+    async def summarize(
+        self,
+        *,
+        session_id: str,
+        messages,
+        closed_duration_seconds: float,
+    ) -> str | None:
+        transcript = tuple(message.content for message in messages)
+        self.calls.append((session_id, closed_duration_seconds, transcript))
+        return self.summary_text
 
 
 class RecordingTextToSpeechEngine(TextToSpeechEngine):
@@ -279,6 +298,67 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             [message.content for message in self.orchestrator.session.snapshot()],
             ["second", "captured"],
         )
+
+    async def test_conversation_window_reopen_injects_llm_resume_note(self) -> None:
+        language_model = CapturingLanguageModel()
+        resume_summarizer = StubResumeSummarizer(
+            "Carry forward:\n"
+            "- The user is rushing to finish a four-hour mission.\n"
+            "Assistant approach:\n"
+            "- Keep guidance concise and progress-first.\n"
+            "Freshness cautions:\n"
+            "- Exact current screen state may have changed."
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                conversation=ConversationSettings(language=None),
+                conversation_window=ConversationWindowSettings(
+                    reset_policy=ConversationWindowResetPolicy.RESUME_SUMMARY,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            resume_summarizer=resume_summarizer,  # type: ignore[arg-type]
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        accepted = await orchestrator.submit_utterance(
+            AudioSegment.from_text("4時間以内にクリアしたいから急いでる")
+        )
+        self.assertTrue(accepted)
+        await orchestrator.wait_for_idle()
+
+        await orchestrator.prepare_conversation_window_resume_summary()
+        await orchestrator.handle_conversation_window_reopened()
+
+        accepted = await orchestrator.submit_utterance(AudioSegment.from_text("次どうする"))
+        self.assertTrue(accepted)
+        await orchestrator.wait_for_idle()
+
+        latest_request = language_model.requests[-1]
+        system_messages = [
+            message.content
+            for message in latest_request.messages
+            if message.role == "system"
+        ]
+        joined_system_messages = "\n".join(system_messages)
+        self.assertIn("Conversation window resume note:", joined_system_messages)
+        self.assertIn("four-hour mission", joined_system_messages)
+        self.assertIn("Keep guidance concise", joined_system_messages)
+        self.assertEqual(
+            [message.content for message in latest_request.messages if message.role == "user"],
+            ["次どうする"],
+        )
+        self.assertEqual(len(resume_summarizer.calls), 1)
 
     async def test_new_turn_interrupts_existing_playback(self) -> None:
         self.orchestrator.audio_output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)

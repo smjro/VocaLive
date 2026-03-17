@@ -12,6 +12,7 @@ from vocalive.audio.output import AudioOutput
 from vocalive.config.settings import (
     AppSettings,
     ApplicationAudioMode,
+    ConversationWindowResetPolicy,
     InputProvider,
     MicrophoneInterruptMode,
 )
@@ -41,6 +42,10 @@ from vocalive.pipeline.reply_policy import (
     decide_reply,
     looks_like_explicit_assistant_address,
 )
+from vocalive.pipeline.resume_summary import (
+    ConversationResumeSummarizer,
+    build_resume_system_message,
+)
 from vocalive.pipeline.session import ConversationSession
 from vocalive.screen.base import ScreenCaptureEngine
 from vocalive.stt.base import SpeechToTextEngine
@@ -69,6 +74,7 @@ class ConversationOrchestrator:
         audio_output: AudioOutput,
         event_sink: ConversationEventSink | None = None,
         screen_capture_engine: ScreenCaptureEngine | None = None,
+        resume_summarizer: ConversationResumeSummarizer | None = None,
         logger: logging.Logger | None = None,
         metrics: MetricsRecorder | None = None,
     ) -> None:
@@ -79,6 +85,7 @@ class ConversationOrchestrator:
         self.audio_output = audio_output
         self.event_sink = event_sink or NullConversationEventSink()
         self.screen_capture_engine = screen_capture_engine
+        self.resume_summarizer = resume_summarizer
         self.logger = logger or get_logger("vocalive.orchestrator")
         self.metrics = metrics or InMemoryMetricsRecorder()
         self.session = ConversationSession(session_id=settings.session_id)
@@ -102,6 +109,9 @@ class ConversationOrchestrator:
         self._pending_application_segment: AudioSegment | None = None
         self._pending_application_segment_generation = 0
         self._pending_application_segment_task: asyncio.Task[None] | None = None
+        self._resume_summary_lock = asyncio.Lock()
+        self._prepared_resume_summary_text: str | None = None
+        self._prepared_resume_summary_revision: int | None = None
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
@@ -131,17 +141,27 @@ class ConversationOrchestrator:
         except asyncio.CancelledError:
             pass
 
-    async def reset_session_history(self, *, reason: str = "session_reset") -> None:
+    async def reset_session_history(
+        self,
+        *,
+        reason: str = "session_reset",
+        carry_forward_messages: tuple[ConversationMessage, ...] = (),
+    ) -> None:
         await self._discard_pending_live_segment()
         await self._discard_pending_application_segment()
         await self._interrupt_active_turn(reason=reason, force_stop_audio=True)
         drained_conversation_count = _drain_queue(self._queue)
         drained_application_count = _drain_queue(self._application_context_queue)
         self.session = ConversationSession(session_id=self.session.session_id)
+        for message in carry_forward_messages:
+            if message.role != "system":
+                continue
+            self.session.append_system_message(message.content)
         self._last_assistant_response_ms = None
         self._last_application_audio_submission_ms = None
         self._last_screen_observation_ms = None
         self._last_screen_capture_fingerprint = None
+        self._clear_prepared_resume_summary()
         self._set_idle_if_drained()
         log_event(
             self.logger,
@@ -150,6 +170,82 @@ class ConversationOrchestrator:
             reason=reason,
             drained_conversation_count=drained_conversation_count,
             drained_application_count=drained_application_count,
+            carry_forward_message_count=len(carry_forward_messages),
+        )
+
+    async def prepare_conversation_window_resume_summary(self) -> None:
+        if (
+            self.settings.conversation_window.reset_policy
+            is not ConversationWindowResetPolicy.RESUME_SUMMARY
+        ):
+            return
+        if self.resume_summarizer is None:
+            return
+        async with self._resume_summary_lock:
+            if self.session.revision == self._prepared_resume_summary_revision:
+                return
+            await self.wait_for_idle()
+            snapshot = self.session.snapshot()
+            revision = self.session.revision
+            if revision == self._prepared_resume_summary_revision:
+                return
+            if not _has_resume_summary_source_messages(snapshot):
+                self._prepared_resume_summary_text = None
+                self._prepared_resume_summary_revision = revision
+                return
+            try:
+                summary_text = await self.resume_summarizer.summarize(
+                    session_id=self.session.session_id,
+                    messages=snapshot,
+                    closed_duration_seconds=(
+                        self.settings.conversation_window.closed_duration_seconds
+                    ),
+                )
+            except Exception as exc:
+                log_event(
+                    self.logger,
+                    "conversation_window_resume_summary_failed",
+                    session_id=self.session.session_id,
+                    revision=revision,
+                    error=str(exc),
+                )
+                return
+            if revision != self.session.revision:
+                log_event(
+                    self.logger,
+                    "conversation_window_resume_summary_discarded",
+                    session_id=self.session.session_id,
+                    summarized_revision=revision,
+                    current_revision=self.session.revision,
+                )
+                return
+            self._prepared_resume_summary_text = summary_text
+            self._prepared_resume_summary_revision = revision
+            log_event(
+                self.logger,
+                "conversation_window_resume_summary_ready",
+                session_id=self.session.session_id,
+                revision=revision,
+                char_count=len(summary_text or ""),
+                has_summary=summary_text is not None,
+            )
+
+    async def handle_conversation_window_reopened(
+        self,
+        *,
+        reason: str = "conversation_window_reopened",
+    ) -> None:
+        if (
+            self.settings.conversation_window.reset_policy
+            is not ConversationWindowResetPolicy.RESUME_SUMMARY
+        ):
+            await self.reset_session_history(reason=reason)
+            return
+        await self.prepare_conversation_window_resume_summary()
+        carry_forward_messages = self._consume_prepared_resume_messages()
+        await self.reset_session_history(
+            reason=reason,
+            carry_forward_messages=carry_forward_messages,
         )
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
@@ -189,6 +285,30 @@ class ConversationOrchestrator:
         if accepted:
             self._last_application_audio_submission_ms = application_audio_submission_ms
         return accepted
+
+    def _consume_prepared_resume_messages(self) -> tuple[ConversationMessage, ...]:
+        current_revision = self.session.revision
+        summary_text = None
+        if self._prepared_resume_summary_revision == current_revision:
+            summary_text = self._prepared_resume_summary_text
+        self._clear_prepared_resume_summary()
+        if not summary_text:
+            return tuple()
+        return (
+            ConversationMessage(
+                role="system",
+                content=build_resume_system_message(
+                    summary_text,
+                    closed_duration_seconds=(
+                        self.settings.conversation_window.closed_duration_seconds
+                    ),
+                ),
+            ),
+        )
+
+    def _clear_prepared_resume_summary(self) -> None:
+        self._prepared_resume_summary_text = None
+        self._prepared_resume_summary_revision = None
 
     async def _queue_turn_segment(self, segment: AudioSegment, *, reason: str) -> bool:
         self._idle_event.clear()
@@ -1203,3 +1323,9 @@ def _merge_transcript_hints(first: str | None, second: str | None) -> str | None
     if not normalized_parts:
         return None
     return " ".join(normalized_parts)
+
+
+def _has_resume_summary_source_messages(
+    messages: tuple[ConversationMessage, ...],
+) -> bool:
+    return any(message.role in {"user", "assistant", "application"} for message in messages)

@@ -22,6 +22,7 @@ from vocalive.config.settings import (
     AivisSpeechSettings,
     ApplicationAudioMode,
     ApplicationAudioSettings,
+    ConversationWindowResetPolicy,
     ConversationWindowSettings,
     InputProvider,
     InputSettings,
@@ -71,8 +72,42 @@ class BuildOrchestratorTests(unittest.TestCase):
         self.assertTrue(orchestrator.stt_engine.application_audio_enhancement_enabled)
         self.assertIsInstance(orchestrator.language_model, GeminiLanguageModel)
         self.assertEqual(orchestrator.language_model.thinking_budget, 0)
+        self.assertIsNone(orchestrator.resume_summarizer)
         self.assertIsInstance(orchestrator.tts_engine, AivisSpeechTextToSpeechEngine)
         self.assertIsInstance(orchestrator.audio_output, MemoryAudioOutput)
+
+    def test_build_orchestrator_configures_neutral_gemini_resume_summarizer(self) -> None:
+        orchestrator = build_orchestrator(
+            AppSettings(
+                model_provider="gemini",
+                conversation_window=ConversationWindowSettings(
+                    reset_policy=ConversationWindowResetPolicy.RESUME_SUMMARY,
+                ),
+            )
+        )
+
+        self.assertIsNotNone(orchestrator.resume_summarizer)
+        assert orchestrator.resume_summarizer is not None
+        self.assertIsInstance(orchestrator.resume_summarizer.language_model, GeminiLanguageModel)
+        summarizer_model = orchestrator.resume_summarizer.language_model
+        assert isinstance(summarizer_model, GeminiLanguageModel)
+        self.assertIsNone(summarizer_model.thinking_budget)
+        self.assertIsNone(summarizer_model.system_instruction)
+        self.assertEqual(summarizer_model.temperature, 0.0)
+
+    def test_build_orchestrator_rejects_resume_summary_without_gemini(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "VOCALIVE_MODEL_PROVIDER=gemini",
+        ):
+            build_orchestrator(
+                AppSettings(
+                    model_provider="mock",
+                    conversation_window=ConversationWindowSettings(
+                        reset_policy=ConversationWindowResetPolicy.RESUME_SUMMARY,
+                    ),
+                )
+            )
 
     def test_build_audio_input_propagates_device_preferences(self) -> None:
         audio_input = build_audio_input(
@@ -428,6 +463,7 @@ class _RecordingOrchestrator:
         self.submitted: list[str | None] = []
         self.wait_for_idle_calls = 0
         self.reset_reasons: list[str] = []
+        self.prepare_resume_summary_calls = 0
 
     async def submit_utterance(self, segment: AudioSegment) -> bool:
         self.submitted.append(segment.transcript_hint)
@@ -442,6 +478,16 @@ class _RecordingOrchestrator:
 
     async def reset_session_history(self, *, reason: str = "session_reset") -> None:
         self.reset_reasons.append(reason)
+
+    async def handle_conversation_window_reopened(
+        self,
+        *,
+        reason: str = "conversation_window_reopened",
+    ) -> None:
+        self.reset_reasons.append(reason)
+
+    async def prepare_conversation_window_resume_summary(self) -> None:
+        self.prepare_resume_summary_calls += 1
 
 
 class _FakeClock:
