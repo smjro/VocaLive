@@ -24,6 +24,7 @@ from vocalive.config.settings import (
 )
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
 from vocalive.runtime import (
+    _maybe_start_conversation_window_monitor,
     build_audio_input,
     build_managed_aivis_engine,
     build_orchestrator,
@@ -867,6 +868,7 @@ class _ActiveRuntime:
     audio_input: AudioInput
     managed_aivis_engine: ManagedAivisSpeechEngine | None
     overlay: OverlayServer | None
+    monitor_task: asyncio.Task[None] | None
     reader_task: asyncio.Task[None]
     input_label: str | None
 
@@ -966,6 +968,7 @@ class ControllerRuntimeManager:
             overlay: OverlayServer | None = None
             orchestrator: ConversationOrchestrator | None = None
             audio_input: AudioInput | None = None
+            monitor_task: asyncio.Task[None] | None = None
             try:
                 if managed_aivis_engine is not None:
                     await managed_aivis_engine.start()
@@ -985,6 +988,10 @@ class ControllerRuntimeManager:
                     orchestrator,
                     settings=settings,
                 )
+                monitor_task = _maybe_start_conversation_window_monitor(
+                    orchestrator,
+                    conversation_window=conversation_window,
+                )
                 input_label = await audio_input.start()
                 reader_task = asyncio.create_task(
                     self._reader_loop(
@@ -1000,6 +1007,7 @@ class ControllerRuntimeManager:
                     audio_input=audio_input,
                     managed_aivis_engine=managed_aivis_engine,
                     overlay=overlay,
+                    monitor_task=monitor_task,
                     reader_task=reader_task,
                     input_label=input_label,
                 )
@@ -1016,6 +1024,7 @@ class ControllerRuntimeManager:
                     audio_input=audio_input,
                     managed_aivis_engine=managed_aivis_engine,
                     overlay=overlay,
+                    monitor_task=monitor_task,
                 )
                 self._set_state(
                     status="error",
@@ -1107,7 +1116,12 @@ class ControllerRuntimeManager:
         audio_input: AudioInput | None,
         managed_aivis_engine: ManagedAivisSpeechEngine | None,
         overlay: OverlayServer | None,
+        monitor_task: asyncio.Task[None] | None,
     ) -> None:
+        if monitor_task is not None:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
         if audio_input is not None:
             with contextlib.suppress(Exception):
                 await audio_input.close()
@@ -1127,6 +1141,10 @@ class ControllerRuntimeManager:
         *,
         await_reader: bool,
     ) -> None:
+        if runtime.monitor_task is not None:
+            runtime.monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runtime.monitor_task
         with contextlib.suppress(Exception):
             await runtime.audio_input.close()
         if await_reader and runtime.reader_task is not asyncio.current_task():

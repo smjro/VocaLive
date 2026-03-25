@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -64,6 +65,14 @@ class _SynthesizedChunk:
     duration_ms: float
 
 
+@dataclass(frozen=True)
+class _ExplicitInterruptProbeRequest:
+    segment: AudioSegment
+    session_id: str
+    turn_id: int
+    reason: str
+
+
 class ConversationOrchestrator:
     def __init__(
         self,
@@ -112,6 +121,9 @@ class ConversationOrchestrator:
         self._resume_summary_lock = asyncio.Lock()
         self._prepared_resume_summary_text: str | None = None
         self._prepared_resume_summary_revision: int | None = None
+        self._explicit_interrupt_probe_task: asyncio.Task[None] | None = None
+        self._pending_explicit_interrupt_probe: _ExplicitInterruptProbeRequest | None = None
+        self._probed_transcript_hints: OrderedDict[int, str] = OrderedDict()
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
@@ -130,6 +142,7 @@ class ConversationOrchestrator:
     async def stop(self) -> None:
         await self._discard_pending_live_segment()
         await self._discard_pending_application_segment()
+        await self._discard_explicit_interrupt_probe()
         await self._interrupt_active_turn(reason="shutdown", force_stop_audio=True)
         worker_task = self._worker_task
         self._worker_task = None
@@ -149,6 +162,7 @@ class ConversationOrchestrator:
     ) -> None:
         await self._discard_pending_live_segment()
         await self._discard_pending_application_segment()
+        await self._discard_explicit_interrupt_probe()
         await self._interrupt_active_turn(reason=reason, force_stop_audio=True)
         drained_conversation_count = _drain_queue(self._queue)
         drained_application_count = _drain_queue(self._application_context_queue)
@@ -162,6 +176,7 @@ class ConversationOrchestrator:
         self._last_screen_observation_ms = None
         self._last_screen_capture_fingerprint = None
         self._clear_prepared_resume_summary()
+        self._probed_transcript_hints.clear()
         self._set_idle_if_drained()
         log_event(
             self.logger,
@@ -313,7 +328,11 @@ class ConversationOrchestrator:
     async def _queue_turn_segment(self, segment: AudioSegment, *, reason: str) -> bool:
         self._idle_event.clear()
         async with self._queue_submission_lock:
-            queued_segment, should_interrupt = await self._prepare_segment_for_queue(segment)
+            (
+                queued_segment,
+                should_interrupt,
+                interrupt_probe_request,
+            ) = await self._prepare_segment_for_queue(segment, reason=reason)
             if should_interrupt:
                 await self._interrupt_active_turn(reason=reason)
             accepted = await self._queue.put(queued_segment)
@@ -321,6 +340,8 @@ class ConversationOrchestrator:
             self._log_queue_overflow(queue_name="conversation", queue_size=self._queue.qsize())
             self._set_idle_if_drained()
             return False
+        if interrupt_probe_request is not None:
+            self._schedule_explicit_interrupt_probe(interrupt_probe_request)
         self._work_available.set()
         return True
 
@@ -535,6 +556,9 @@ class ConversationOrchestrator:
         context: TurnContext,
         cancellation: CancellationToken,
     ) -> None:
+        cached_transcript_hint = self._consume_probed_transcript_hint(segment)
+        if cached_transcript_hint is not None and not segment.transcript_hint:
+            segment = _with_transcript_hint(segment, cached_transcript_hint)
         turn_started_ms = monotonic_ms()
         self._active_stage = "stt"
         with timed_stage(self.metrics, "stt", context):
@@ -1011,30 +1035,48 @@ class ConversationOrchestrator:
     async def _prepare_segment_for_queue(
         self,
         segment: AudioSegment,
-    ) -> tuple[AudioSegment, bool]:
+        *,
+        reason: str,
+    ) -> tuple[AudioSegment, bool, _ExplicitInterruptProbeRequest | None]:
         if segment.source == "application_audio":
-            return await self._prepare_application_audio_segment_for_queue(segment)
+            return await self._prepare_application_audio_segment_for_queue(segment, reason=reason)
         if not self._is_microphone_user_segment(segment):
-            return segment, True
+            return segment, True, None
 
         interrupt_mode = self.settings.input.interrupt_mode
         if interrupt_mode is MicrophoneInterruptMode.ALWAYS:
-            return segment, True
+            return segment, True, None
         if interrupt_mode is MicrophoneInterruptMode.DISABLED:
-            return segment, False
+            return segment, False, None
         if self._active_stage not in {"tts", "playback"}:
-            return segment, False
-
-        prepared_segment, should_interrupt = await self._probe_explicit_interrupt_segment(segment)
-        return prepared_segment, should_interrupt
+            return segment, False, None
+        if segment.transcript_hint:
+            prepared_segment, should_interrupt = await self._probe_explicit_interrupt_segment(
+                segment
+            )
+            return prepared_segment, should_interrupt, None
+        return segment, False, self._build_explicit_interrupt_probe_request(
+            segment,
+            reason=reason,
+        )
 
     async def _prepare_application_audio_segment_for_queue(
         self,
         segment: AudioSegment,
-    ) -> tuple[AudioSegment, bool]:
+        *,
+        reason: str,
+    ) -> tuple[AudioSegment, bool, _ExplicitInterruptProbeRequest | None]:
         if self._active_stage not in {"tts", "playback"}:
-            return segment, False
-        return await self._probe_explicit_interrupt_segment(segment)
+            return segment, False, None
+        if segment.transcript_hint:
+            prepared_segment, should_interrupt = await self._probe_explicit_interrupt_segment(
+                segment
+            )
+            return prepared_segment, should_interrupt, None
+        return segment, False, self._build_explicit_interrupt_probe_request(
+            segment,
+            reason=reason,
+        )
 
     async def _probe_explicit_interrupt_segment(
         self,
@@ -1068,6 +1110,127 @@ class ConversationOrchestrator:
             assistant_names=_assistant_names_for_interrupt(self.settings),
         )
         return segment, should_interrupt
+
+    def _build_explicit_interrupt_probe_request(
+        self,
+        segment: AudioSegment,
+        *,
+        reason: str,
+    ) -> _ExplicitInterruptProbeRequest | None:
+        active_context = self._active_context
+        if active_context is None:
+            return None
+        return _ExplicitInterruptProbeRequest(
+            segment=segment,
+            session_id=active_context.session_id,
+            turn_id=active_context.turn_id,
+            reason=reason,
+        )
+
+    def _schedule_explicit_interrupt_probe(
+        self,
+        request: _ExplicitInterruptProbeRequest,
+    ) -> None:
+        task = self._explicit_interrupt_probe_task
+        if task is not None and not task.done():
+            self._pending_explicit_interrupt_probe = request
+            return
+        self._start_explicit_interrupt_probe(request)
+
+    def _start_explicit_interrupt_probe(
+        self,
+        request: _ExplicitInterruptProbeRequest,
+    ) -> None:
+        task = asyncio.create_task(
+            self._run_explicit_interrupt_probe(request),
+            name=f"vocalive-explicit-interrupt-probe-{request.turn_id}",
+        )
+        self._explicit_interrupt_probe_task = task
+        task.add_done_callback(self._finalize_explicit_interrupt_probe)
+
+    async def _run_explicit_interrupt_probe(
+        self,
+        request: _ExplicitInterruptProbeRequest,
+    ) -> None:
+        probe_context = TurnContext(
+            session_id=request.session_id,
+            turn_id=request.turn_id + 1,
+        )
+        try:
+            transcription = await self.stt_engine.transcribe(request.segment, probe_context)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                self.logger,
+                "interrupt_probe_failed",
+                session_id=request.session_id,
+                stage=self._active_stage,
+                audio_source=request.segment.source,
+                error=str(exc),
+            )
+            return
+        transcription_text = transcription.text.strip()
+        if not transcription_text:
+            return
+        self._remember_probed_transcript_hint(request.segment, transcription_text)
+        if not looks_like_explicit_assistant_address(
+            transcription_text,
+            assistant_names=_assistant_names_for_interrupt(self.settings),
+        ):
+            return
+        active_context = self._active_context
+        if active_context is None:
+            return
+        if (
+            active_context.session_id != request.session_id
+            or active_context.turn_id != request.turn_id
+            or self._active_stage not in {"tts", "playback"}
+        ):
+            return
+        await self._interrupt_active_turn(reason=request.reason)
+
+    def _finalize_explicit_interrupt_probe(self, task: asyncio.Task[None]) -> None:
+        if self._explicit_interrupt_probe_task is task:
+            self._explicit_interrupt_probe_task = None
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(
+                self.logger,
+                "interrupt_probe_failed",
+                session_id=self.session.session_id,
+                stage=self._active_stage,
+                error=str(exc),
+            )
+        pending_request = self._pending_explicit_interrupt_probe
+        self._pending_explicit_interrupt_probe = None
+        if pending_request is not None:
+            self._start_explicit_interrupt_probe(pending_request)
+
+    async def _discard_explicit_interrupt_probe(self) -> None:
+        self._pending_explicit_interrupt_probe = None
+        task = self._explicit_interrupt_probe_task
+        self._explicit_interrupt_probe_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def _remember_probed_transcript_hint(
+        self,
+        segment: AudioSegment,
+        transcript_hint: str,
+    ) -> None:
+        self._probed_transcript_hints.pop(id(segment), None)
+        self._probed_transcript_hints[id(segment)] = transcript_hint
+        while len(self._probed_transcript_hints) > 32:
+            self._probed_transcript_hints.popitem(last=False)
+
+    def _consume_probed_transcript_hint(self, segment: AudioSegment) -> str | None:
+        return self._probed_transcript_hints.pop(id(segment), None)
 
     def _is_microphone_user_segment(self, segment: AudioSegment) -> bool:
         return (

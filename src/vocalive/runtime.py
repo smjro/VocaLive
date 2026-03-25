@@ -14,12 +14,14 @@ from vocalive.config.settings import (
     ConversationWindowResetPolicy,
     InputProvider,
     OutputProvider,
+    QueueOverflowStrategy,
 )
 from vocalive.llm.echo import EchoLanguageModel
 from vocalive.llm.gemini import GeminiLanguageModel
 from vocalive.models import AudioSegment
 from vocalive.pipeline.events import ConversationEventSink
 from vocalive.pipeline.orchestrator import ConversationOrchestrator
+from vocalive.pipeline.queues import BoundedAsyncQueue
 from vocalive.pipeline.resume_summary import ConversationResumeSummarizer
 from vocalive.stt.mock import MockSpeechToTextEngine
 from vocalive.stt.moonshine import MoonshineSpeechToTextEngine
@@ -362,20 +364,57 @@ async def forward_live_audio_segments(
     conversation_window: ConversationWindowGate,
     print_queue_overflow: bool = False,
 ) -> int:
-    while True:
-        segment = await audio_input.read()
-        if segment is None:
-            return 0
-        if not conversation_window.should_forward_segment(segment):
-            continue
-        if conversation_window.consume_history_reset_request():
-            await orchestrator.handle_conversation_window_reopened(
-                reason="conversation_window_reopened"
-            )
-        accepted = await orchestrator.submit_utterance(segment)
-        if accepted or not print_queue_overflow:
-            continue
-        print("assistant> queue full, utterance dropped")
+    queue_settings = getattr(getattr(orchestrator, "settings", None), "queue", None)
+    buffered_queue_maxsize = max(8, max(1, getattr(queue_settings, "ingress_maxsize", 4)) * 2)
+    buffered_segments: BoundedAsyncQueue[tuple[AudioSegment | None, bool]] = BoundedAsyncQueue(
+        maxsize=buffered_queue_maxsize,
+        overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+    )
+    reader_error: Exception | None = None
+
+    async def _read_live_segments() -> None:
+        nonlocal reader_error
+        try:
+            while True:
+                segment = await audio_input.read()
+                if segment is None:
+                    return
+                if not conversation_window.should_forward_segment(segment):
+                    continue
+                await buffered_segments.put(
+                    (
+                        segment,
+                        conversation_window.consume_history_reset_request(),
+                    )
+                )
+        except Exception as exc:
+            reader_error = exc
+        finally:
+            await buffered_segments.put((None, False))
+
+    reader_task = asyncio.create_task(
+        _read_live_segments(),
+        name="vocalive-live-audio-reader",
+    )
+    try:
+        while True:
+            segment, should_reopen_window = await buffered_segments.get()
+            if segment is None:
+                if reader_error is not None:
+                    raise reader_error
+                return 0
+            if should_reopen_window:
+                await orchestrator.handle_conversation_window_reopened(
+                    reason="conversation_window_reopened"
+                )
+            accepted = await orchestrator.submit_utterance(segment)
+            if accepted or not print_queue_overflow:
+                continue
+            print("assistant> queue full, utterance dropped")
+    finally:
+        reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reader_task
 
 
 def _maybe_start_conversation_window_monitor(

@@ -203,6 +203,29 @@ class CountingSpeechToTextEngine(MockSpeechToTextEngine):
         return Transcription(text=text, provider=self.name, confidence=1.0, language="ja")
 
 
+class BlockingSpeechToTextEngine(CountingSpeechToTextEngine):
+    def __init__(
+        self,
+        release_event: asyncio.Event,
+        *,
+        text_resolver: Callable[[AudioSegment], str] | None = None,
+    ) -> None:
+        super().__init__(text_resolver=text_resolver)
+        self.release_event = release_event
+        self.blocking_transcribe_started = asyncio.Event()
+
+    async def transcribe(
+        self,
+        segment: AudioSegment,
+        context: TurnContext,
+        cancellation: CancellationToken | None = None,
+    ) -> Transcription:
+        if not segment.transcript_hint:
+            self.blocking_transcribe_started.set()
+            await self.release_event.wait()
+        return await super().transcribe(segment, context, cancellation=cancellation)
+
+
 def _pcm_silence(duration_ms: float, *, sample_rate_hz: int = 16_000) -> bytes:
     frame_count = max(1, int(sample_rate_hz * duration_ms / 1000.0))
     return b"\0\0" * frame_count
@@ -699,6 +722,60 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stt_engine.backend_call_count, 1)
         self.assertEqual(stt_engine.transcribe_call_count, 3)
         self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
+
+    async def test_raw_explicit_interrupt_probe_does_not_block_submit(self) -> None:
+        release_event = asyncio.Event()
+        explicit_interrupt_text = "assistant help"
+        stt_engine = BlockingSpeechToTextEngine(
+            release_event,
+            text_resolver=(
+                lambda segment: explicit_interrupt_text
+                if segment.source == "user"
+                else "ignored"
+            ),
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.EXPLICIT,
+                ),
+                reply=ReplySettings(debounce_ms=0.0),
+            ),
+            stt_engine=stt_engine,
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        output = orchestrator.audio_output
+        assert isinstance(output, MemoryAudioOutput)
+
+        await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+        await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
+
+        accepted = await asyncio.wait_for(
+            orchestrator.submit_utterance(_raw_audio_segment(800.0)),
+            timeout=0.05,
+        )
+        self.assertTrue(accepted)
+        await self._wait_for(lambda: stt_engine.blocking_transcribe_started.is_set())
+
+        self.assertEqual(output.stop_calls, 0)
+
+        release_event.set()
+        await orchestrator.wait_for_idle()
+
+        self.assertGreaterEqual(stt_engine.backend_call_count, 1)
+        self.assertIn("Assistant: assistant help", output.completed_texts)
 
     async def test_conversation_language_instruction_is_included_for_llm(self) -> None:
         language_model = CapturingLanguageModel()

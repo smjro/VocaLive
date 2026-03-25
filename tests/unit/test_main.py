@@ -458,6 +458,16 @@ class _ScriptedMicrophoneInput(MicrophoneAudioInput):
         return None
 
 
+class _CountingScriptedMicrophoneInput(_ScriptedMicrophoneInput):
+    def __init__(self, segments: list[_SpeechStartEvent | AudioSegment | None]) -> None:
+        super().__init__(segments)
+        self.read_call_count = 0
+
+    async def read(self) -> AudioSegment | None:
+        self.read_call_count += 1
+        return await super().read()
+
+
 class _RecordingOrchestrator:
     def __init__(self) -> None:
         self.submitted: list[str | None] = []
@@ -490,6 +500,20 @@ class _RecordingOrchestrator:
         self.prepare_resume_summary_calls += 1
 
 
+class _BlockingRecordingOrchestrator(_RecordingOrchestrator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_submit_started = asyncio.Event()
+        self.release_first_submit = asyncio.Event()
+
+    async def submit_utterance(self, segment: AudioSegment) -> bool:
+        self.submitted.append(segment.transcript_hint)
+        if len(self.submitted) == 1:
+            self.first_submit_started.set()
+            await self.release_first_submit.wait()
+        return True
+
+
 class _FakeClock:
     def __init__(self, *values_ms: float) -> None:
         self._values = list(values_ms)
@@ -519,6 +543,30 @@ class MicrophoneLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(orchestrator.submitted, ["first", "second"])
         self.assertEqual(orchestrator.wait_for_idle_calls, 0)
         self.assertIsNotNone(audio_input.speech_start_handler)
+
+    async def test_microphone_loop_keeps_draining_input_while_submit_is_blocked(self) -> None:
+        audio_input = _CountingScriptedMicrophoneInput(
+            [
+                AudioSegment.from_text("first"),
+                AudioSegment.from_text("second"),
+                None,
+            ]
+        )
+        orchestrator = _BlockingRecordingOrchestrator()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_task = asyncio.create_task(_run_microphone_loop(orchestrator, audio_input))
+            await asyncio.wait_for(orchestrator.first_submit_started.wait(), timeout=1.0)
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(audio_input.read_call_count, 3)
+            self.assertEqual(orchestrator.submitted, ["first"])
+
+            orchestrator.release_first_submit.set()
+            exit_code = await asyncio.wait_for(run_task, timeout=1.0)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(orchestrator.submitted, ["first", "second"])
 
     async def test_microphone_loop_reopens_conversation_window_after_user_speech(self) -> None:
         audio_input = _ScriptedMicrophoneInput(

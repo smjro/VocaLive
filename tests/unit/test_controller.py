@@ -152,7 +152,10 @@ class ControllerRuntimeManagerTests(unittest.TestCase):
             return_value=orchestrator,
         ), patch("vocalive.ui.controller.build_overlay", return_value=overlay), patch(
             "vocalive.ui.controller.configure_logging"
-        ):
+        ), patch(
+            "vocalive.ui.controller._maybe_start_conversation_window_monitor",
+            return_value=None,
+        ) as start_monitor:
             started = manager.start_runtime(values)
             stopped = manager.stop_runtime()
 
@@ -167,6 +170,7 @@ class ControllerRuntimeManagerTests(unittest.TestCase):
         self.assertTrue(managed_aivis_engine.started)
         self.assertTrue(managed_aivis_engine.stopped)
         self.assertIsNotNone(audio_input.speech_start_handler)
+        start_monitor.assert_called_once()
         manager.close()
 
     def test_runtime_manager_rejects_stdin_mode(self) -> None:
