@@ -33,6 +33,7 @@ The repository currently ships with:
 - Implemented: sentence-by-sentence TTS playback with one-sentence-ahead prefetch
 - Implemented: optional transparent browser overlay with a character image, speech-only captions, and per-chunk text reveal timed to playback
 - Implemented: bounded LLM request compaction with an earlier-conversation summary plus a recent raw-message window
+- Implemented: time-based context freshness so turns older than the configured age budget are passed to the LLM as reference-only background instead of current direct context
 - Implemented: microphone-only reply debounce that merges closely spaced live utterances before one LLM turn
 - Implemented: conservative microphone reply suppression for short reactions and cooldown-period chatter while preserving explicit questions/requests
 - Implemented: separate application-audio summary compaction so older app context does not stay fully verbatim in every LLM request
@@ -211,6 +212,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_USER_NAME` | unset | Optional user name injected before the LLM call so the assistant can answer who it is speaking with without defaulting to name-based greetings |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
+| `VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS` | `90.0` | Maximum age for a message to stay in direct current-turn context; older messages are summarized as reference-only background. Set 0 to disable the age cutoff. |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept verbatim in Gemini requests before older app context is compacted |
 | `VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS` | `900` | Character budget for the earlier application-audio summary injected ahead of the recent raw app-context window |
@@ -317,6 +319,7 @@ Current provider support:
 - on macOS, application-audio capture uses ScreenCaptureKit to isolate the selected app; on Windows, application-audio capture uses WASAPI process loopback for the selected process tree while the selected process remains alive
 - optional screen capture resolves a named on-screen window on macOS or Windows and attaches one PNG of that window to the current Gemini turn when an explicit trigger phrase or an eligible passive screen-reference phrase matches
 - older user/assistant dialogue is compacted into one bounded system summary before Gemini requests so long sessions do not resend the entire raw conversation every turn
+- turns older than `VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS` stay available only as reference-only summary lines, so stale `now/this/remaining time` context is less likely to be treated as current
 - `aivis` uses the local AivisSpeech engine API, resolves a style id from `/speakers` when needed, and can optionally launch the local engine in `cpu` or `gpu` mode before the runtime starts
 - `speaker` output plays synthesized audio through the configured external command or the platform default playback command
 - `overlay` is an optional local browser UI fed by orchestrator events and chunk-level playback timing

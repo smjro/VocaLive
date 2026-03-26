@@ -469,6 +469,7 @@ class AppSettingsTests(unittest.TestCase):
             os.environ,
             {
                 "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT": "5",
+                "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS": "75",
                 "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS": "640",
                 "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT": "2",
                 "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS": "420",
@@ -479,6 +480,7 @@ class AppSettingsTests(unittest.TestCase):
             settings = AppSettings.from_env()
 
         self.assertEqual(settings.context.recent_message_count, 5)
+        self.assertEqual(settings.context.active_message_max_age_seconds, 75.0)
         self.assertEqual(settings.context.conversation_summary_max_chars, 640)
         self.assertEqual(settings.context.application_recent_message_count, 2)
         self.assertEqual(settings.context.application_summary_max_chars, 420)
@@ -570,6 +572,7 @@ class AppSettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.screen_capture.passive_cooldown_seconds, 30.0)
         self.assertEqual(settings.context.recent_message_count, 8)
+        self.assertEqual(settings.context.active_message_max_age_seconds, 90.0)
         self.assertEqual(settings.context.conversation_summary_max_chars, 1200)
         self.assertEqual(settings.context.application_recent_message_count, 4)
         self.assertEqual(settings.context.application_summary_max_chars, 900)
@@ -614,6 +617,18 @@ class AppSettingsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported application audio mode"):
                 AppSettings.from_env()
 
+    def test_from_env_rejects_negative_active_message_max_age(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS": "-1"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS must be >= 0",
+            ):
+                AppSettings.from_env()
+
     def test_from_env_rejects_unknown_microphone_interrupt_mode(self) -> None:
         with patch.dict(
             os.environ,
@@ -635,6 +650,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_CONVERSATION_LANGUAGE",
             "VOCALIVE_USER_NAME",
             "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
+            "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS",
             "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
             "VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT",
             "VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS",

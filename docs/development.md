@@ -68,6 +68,7 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY=clear` keeps the previous behavior of starting fresh on reopen; `resume_summary` uses a neutral Gemini pass to prepare a carry-forward resume note during the closed interval and injects that note into the next window instead
 - in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, but playback is interrupted only after a finalized app-audio transcript explicitly addresses the assistant
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
+- turns older than `VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS` are compacted as reference-only background instead of staying in direct current-turn context
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
 - microphone reply suppression is enabled by default for low-value live chatter; explicit questions/requests still bypass the policy
 - `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true` makes microphone replies opt-in so think-aloud or read-aloud speech stays silent unless it clearly addresses the assistant or asks for something
@@ -110,6 +111,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_CONVERSATION_LANGUAGE` | `ja` | Per-turn language instruction injected before the LLM call; set empty to disable |
 | `VOCALIVE_USER_NAME` | unset | Optional user name injected before the LLM call so the assistant can answer who it is speaking with without defaulting to name-based greetings |
 | `VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT` | `8` | Number of recent user/assistant messages kept verbatim in Gemini requests before older dialogue is compacted |
+| `VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS` | `90.0` | Maximum age for a message to stay in direct current-turn context; older messages are summarized as reference-only background. Set 0 to disable the age cutoff. |
 | `VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS` | `1200` | Character budget for the earlier-conversation summary injected ahead of the recent raw-message window |
 | `VOCALIVE_CONTEXT_APPLICATION_RECENT_MESSAGE_COUNT` | `4` | Number of recent application-audio messages kept verbatim in Gemini requests before older app context is compacted |
 | `VOCALIVE_CONTEXT_APPLICATION_SUMMARY_MAX_CHARS` | `900` | Character budget for the earlier application-audio summary injected ahead of the recent raw app-context window |

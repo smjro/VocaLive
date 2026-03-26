@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Literal
 
 from vocalive.config.settings import AppSettings
@@ -19,6 +20,7 @@ def build_request_messages(
     *,
     settings: AppSettings,
     conversation_language: str | None,
+    now_utc: datetime | None = None,
 ) -> tuple[ConversationMessage, ...]:
     compacted_messages = list(
         build_compacted_messages(
@@ -36,6 +38,10 @@ def build_request_messages(
             application_summary_min_message_chars=(
                 settings.context.application_summary_min_message_chars
             ),
+            active_message_max_age_seconds=(
+                settings.context.active_message_max_age_seconds
+            ),
+            now_utc=now_utc,
         )
     )
     identity_instruction = build_participant_identity_instruction(settings)
@@ -60,12 +66,14 @@ def build_proactive_request_messages(
     messages: tuple[ConversationMessage, ...],
     *,
     settings: AppSettings,
+    now_utc: datetime | None = None,
 ) -> tuple[ConversationMessage, ...]:
     proactive_messages = list(
         build_request_messages(
             messages,
             settings=settings,
             conversation_language=settings.conversation.language,
+            now_utc=now_utc,
         )
     )
     proactive_messages.insert(

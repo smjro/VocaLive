@@ -176,6 +176,12 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_USER_NAME", "conversation", "string", None, nullable=True),
     SettingDefinition("VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT", "context", "int", "8"),
     SettingDefinition(
+        "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS",
+        "context",
+        "float",
+        "90.0",
+    ),
+    SettingDefinition(
         "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS",
         "context",
         "int",
@@ -701,6 +707,12 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
             "older dialogue is compacted"
         )
     ),
+    "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS": SettingDocumentation(
+        description=(
+            "Maximum age for a message to stay in direct current-turn context; older messages "
+            "are summarized as reference-only background. Set 0 to disable the age cutoff."
+        )
+    ),
     "VOCALIVE_CONTEXT_CONVERSATION_SUMMARY_MAX_CHARS": SettingDocumentation(
         description=(
             "Character budget for the earlier-conversation summary injected ahead of the "
@@ -1071,6 +1083,7 @@ class ConversationSettings:
 @dataclass
 class ContextSettings:
     recent_message_count: int = 8
+    active_message_max_age_seconds: float = 90.0
     conversation_summary_max_chars: int = 1200
     application_recent_message_count: int = 4
     application_summary_max_chars: int = 900
@@ -1152,6 +1165,10 @@ class AppSettings:
             raise ValueError(
                 "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS must be >= 0"
             )
+        if self.context.active_message_max_age_seconds < 0:
+            raise ValueError(
+                "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS must be >= 0"
+            )
         if self.proactive.idle_seconds <= 0:
             raise ValueError("VOCALIVE_PROACTIVE_IDLE_SECONDS must be > 0")
         if self.proactive.cooldown_seconds < 0:
@@ -1222,6 +1239,11 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_CONTEXT_RECENT_MESSAGE_COUNT",
                     default=8,
+                ),
+                active_message_max_age_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS",
+                    default=90.0,
                 ),
                 conversation_summary_max_chars=_read_int(
                     mapping,
