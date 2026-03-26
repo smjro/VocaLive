@@ -512,6 +512,7 @@ _PAGE_TEMPLATE = """
       output: "Output",
       overlay: "Overlay",
       reply: "Reply Policy",
+      proactive: "Proactive",
       gemini: "Gemini",
       screen_capture: "Screen Capture",
       moonshine: "Moonshine",

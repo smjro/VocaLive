@@ -11,7 +11,12 @@ SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from vocalive.screen.macos import MacOSWindowScreenCapture, _MacOSWindowInfo, _select_window
+from vocalive.screen.macos import (
+    MacOSWindowScreenCapture,
+    _MacOSWindowInfo,
+    _WINDOW_QUERY_HELPER_BUILD_TIMEOUT_FLOOR_SECONDS,
+    _select_window,
+)
 
 
 class MacOSWindowSelectionTests(unittest.TestCase):
@@ -147,6 +152,41 @@ class MacOSWindowHelperTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(second_path, binary_path)
                 self.assertTrue(binary_path.exists())
                 compile_process.assert_awaited_once()
+
+    async def test_window_query_helper_build_uses_floor_timeout(self) -> None:
+        engine = MacOSWindowScreenCapture(window_name="Steam", timeout_seconds=3.5)
+        process = _StubProcess()
+
+        with tempfile.TemporaryDirectory() as directory:
+            helper_dir = Path(directory)
+            source_path = helper_dir / "window-query.m"
+            binary_path = helper_dir / "window-query"
+
+            async def create_subprocess_exec(*args, **kwargs):
+                del kwargs
+                Path(args[-1]).write_bytes(b"compiled-binary")
+                return process
+
+            with (
+                patch("vocalive.screen.macos._WINDOW_QUERY_HELPER_DIR", helper_dir),
+                patch("vocalive.screen.macos._WINDOW_QUERY_HELPER_SOURCE_PATH", source_path),
+                patch("vocalive.screen.macos._WINDOW_QUERY_HELPER_BINARY_PATH", binary_path),
+                patch(
+                    "vocalive.screen.macos.asyncio.create_subprocess_exec",
+                    AsyncMock(side_effect=create_subprocess_exec),
+                ),
+                patch(
+                    "vocalive.screen.macos._communicate_with_cancellation",
+                    AsyncMock(return_value=(b"", b"")),
+                ) as communicate,
+            ):
+                await engine._ensure_window_query_helper()
+
+        communicate.assert_awaited_once_with(
+            process=process,
+            cancellation=None,
+            timeout_seconds=_WINDOW_QUERY_HELPER_BUILD_TIMEOUT_FLOOR_SECONDS,
+        )
 
     async def test_capture_window_resizes_image_before_returning(self) -> None:
         engine = MacOSWindowScreenCapture(

@@ -12,20 +12,31 @@ _EXPLICIT_REQUEST_MARKERS = (
     "おしえて",
     "どうすれば",
     "どうやって",
+    "見て",
+    "みて",
+)
+_EXPLICIT_REQUEST_ENDINGS = (
+    "どうする",
+    "どうしよう",
+    "どうかな",
+    "どう思う",
     "なんで",
     "なぜ",
     "なに",
     "何",
     "どこ",
     "いつ",
-    "help",
-    "please",
-    "can you",
-    "could you",
-    "what",
-    "why",
-    "how",
 )
+_SHORT_EXPLICIT_REQUEST_MARKERS = (
+    "なんで",
+    "なぜ",
+    "なに",
+    "何",
+    "どこ",
+    "いつ",
+    "どう",
+)
+_SHORT_EXPLICIT_REQUEST_MAX_CHARS = 8
 _GREETING_MARKERS = {
     "こんにちは",
     "こんばんは",
@@ -73,6 +84,7 @@ def decide_reply(
     settings: ReplySettings,
     last_assistant_response_ms: float | None,
     now_ms: float,
+    assistant_names: tuple[str, ...] = (),
 ) -> ReplyDecision:
     if not settings.policy_enabled:
         return ReplyDecision(should_reply=True, reason="policy_disabled")
@@ -80,6 +92,9 @@ def decide_reply(
     normalized_text = "".join(text.lower().split())
     if not normalized_text:
         return ReplyDecision(should_reply=False, reason="empty_text")
+
+    if looks_like_explicit_assistant_address(text, assistant_names=assistant_names):
+        return ReplyDecision(should_reply=True, reason="assistant_addressed")
 
     if _looks_like_explicit_request(normalized_text):
         return ReplyDecision(should_reply=True, reason="explicit_request")
@@ -92,6 +107,9 @@ def decide_reply(
         short_utterance_max_chars=settings.short_utterance_max_chars,
     ):
         return ReplyDecision(should_reply=False, reason="short_reaction")
+
+    if settings.require_explicit_trigger:
+        return ReplyDecision(should_reply=False, reason="explicit_trigger_required")
 
     if (
         last_assistant_response_ms is not None
@@ -119,7 +137,14 @@ def looks_like_explicit_assistant_address(
 
 
 def _looks_like_explicit_request(normalized_text: str) -> bool:
-    return any(marker in normalized_text for marker in _EXPLICIT_REQUEST_MARKERS)
+    if any(marker in normalized_text for marker in _EXPLICIT_REQUEST_MARKERS):
+        return True
+    if any(normalized_text.endswith(marker) for marker in _EXPLICIT_REQUEST_ENDINGS):
+        return True
+    return (
+        len(normalized_text) <= _SHORT_EXPLICIT_REQUEST_MAX_CHARS
+        and any(marker in normalized_text for marker in _SHORT_EXPLICIT_REQUEST_MARKERS)
+    )
 
 
 def _looks_like_short_reaction(

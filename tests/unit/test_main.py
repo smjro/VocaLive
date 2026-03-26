@@ -27,6 +27,7 @@ from vocalive.config.settings import (
     InputProvider,
     InputSettings,
     OverlaySettings,
+    ProactiveSettings,
     ScreenCaptureSettings,
 )
 from vocalive.llm.gemini import GeminiLanguageModel
@@ -281,6 +282,45 @@ class BuildOrchestratorTests(unittest.TestCase):
                         enabled=True,
                         apply_to_application_audio=True,
                     ),
+                )
+            )
+
+        self.assertEqual(len(captured_kwargs), 1)
+        self.assertTrue(captured_kwargs[0]["speech_start_events_enabled"])
+
+    def test_build_audio_input_enables_application_audio_speech_events_for_proactive_idle(
+        self,
+    ) -> None:
+        captured_kwargs: list[dict[str, object]] = []
+
+        class _FakeApplicationAudioInput:
+            def __init__(self, **kwargs) -> None:
+                captured_kwargs.append(kwargs)
+                self.kwargs = kwargs
+
+            async def start(self) -> str:
+                return "application audio"
+
+            def set_speech_start_handler(self, handler) -> None:
+                del handler
+
+            async def read(self) -> AudioSegment | None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        with patch("vocalive.runtime.sys.platform", "darwin"), patch(
+            "vocalive.runtime.application_audio_input_class_for_platform",
+            return_value=_FakeApplicationAudioInput,
+        ):
+            build_audio_input(
+                AppSettings(
+                    application_audio=ApplicationAudioSettings(
+                        enabled=True,
+                        target="Steam",
+                    ),
+                    proactive=ProactiveSettings(enabled=True),
                 )
             )
 

@@ -16,6 +16,7 @@ from vocalive.config.settings import (
     ConversationWindowResetPolicy,
     InputProvider,
     MicrophoneInterruptMode,
+    QueueOverflowStrategy,
 )
 from vocalive.llm.base import LanguageModel
 from vocalive.models import (
@@ -57,6 +58,8 @@ from vocalive.util.time import monotonic_ms
 
 
 _SENTENCE_END_MARKERS = frozenset(".!?。！？")
+_PROACTIVE_MONITOR_INTERVAL_SECONDS = 0.05
+_PROACTIVE_SCREEN_FAILURE_BACKOFF_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,11 @@ class _ExplicitInterruptProbeRequest:
     session_id: str
     turn_id: int
     reason: str
+
+
+@dataclass(frozen=True)
+class _ProactiveTurnRequest:
+    observation_version: int
 
 
 class ConversationOrchestrator:
@@ -106,6 +114,10 @@ class ConversationOrchestrator:
             maxsize=settings.queue.ingress_maxsize,
             overflow_strategy=settings.queue.overflow_strategy,
         )
+        self._proactive_queue = BoundedAsyncQueue[_ProactiveTurnRequest](
+            maxsize=1,
+            overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+        )
         self._interruptions = InterruptionController()
         self._idle_event = asyncio.Event()
         self._work_available = asyncio.Event()
@@ -126,23 +138,48 @@ class ConversationOrchestrator:
         self._probed_transcript_hints: OrderedDict[int, str] = OrderedDict()
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
+        self._proactive_monitor_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
         self._active_context: TurnContext | None = None
         self._active_stage: str | None = None
+        self._last_user_activity_ms: float | None = None
         self._last_assistant_response_ms: float | None = None
+        self._last_proactive_response_ms: float | None = None
         self._last_application_audio_submission_ms: float | None = None
         self._last_screen_observation_ms: float | None = None
         self._last_screen_capture_fingerprint: str | None = None
+        self._last_proactive_screen_poll_ms: float | None = None
+        self._proactive_screen_failure_backoff_until_ms: float | None = None
+        self._latest_proactive_screen_capture: ConversationInlineDataPart | None = None
+        self._latest_proactive_screen_capture_fingerprint: str | None = None
+        self._has_new_proactive_observation = False
+        self._proactive_observation_version = 0
+        self._queued_proactive_observation_version: int | None = None
+        self._active_proactive_observation_version: int | None = None
 
     async def start(self) -> None:
         if self._worker_task is not None:
             return
+        if self.settings.proactive.enabled and self._last_user_activity_ms is None:
+            self._last_user_activity_ms = monotonic_ms()
         self._worker_task = asyncio.create_task(self._run(), name="vocalive-orchestrator")
+        if self.settings.proactive.enabled and self._proactive_monitor_task is None:
+            self._proactive_monitor_task = asyncio.create_task(
+                self._run_proactive_monitor(),
+                name="vocalive-proactive-monitor",
+            )
 
     async def stop(self) -> None:
+        proactive_monitor_task = self._proactive_monitor_task
+        self._proactive_monitor_task = None
+        if proactive_monitor_task is not None and not proactive_monitor_task.done():
+            proactive_monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await proactive_monitor_task
         await self._discard_pending_live_segment()
         await self._discard_pending_application_segment()
         await self._discard_explicit_interrupt_probe()
+        self._discard_pending_proactive_turns()
         await self._interrupt_active_turn(reason="shutdown", force_stop_audio=True)
         worker_task = self._worker_task
         self._worker_task = None
@@ -166,15 +203,19 @@ class ConversationOrchestrator:
         await self._interrupt_active_turn(reason=reason, force_stop_audio=True)
         drained_conversation_count = _drain_queue(self._queue)
         drained_application_count = _drain_queue(self._application_context_queue)
+        drained_proactive_count = _drain_queue(self._proactive_queue)
         self.session = ConversationSession(session_id=self.session.session_id)
         for message in carry_forward_messages:
             if message.role != "system":
                 continue
             self.session.append_system_message(message.content)
+        self._last_user_activity_ms = monotonic_ms() if self.settings.proactive.enabled else None
         self._last_assistant_response_ms = None
+        self._last_proactive_response_ms = None
         self._last_application_audio_submission_ms = None
         self._last_screen_observation_ms = None
         self._last_screen_capture_fingerprint = None
+        self._clear_proactive_observations()
         self._clear_prepared_resume_summary()
         self._probed_transcript_hints.clear()
         self._set_idle_if_drained()
@@ -185,6 +226,7 @@ class ConversationOrchestrator:
             reason=reason,
             drained_conversation_count=drained_conversation_count,
             drained_application_count=drained_application_count,
+            drained_proactive_count=drained_proactive_count,
             carry_forward_message_count=len(carry_forward_messages),
         )
 
@@ -495,6 +537,7 @@ class ConversationOrchestrator:
         return True
 
     async def handle_user_speech_start(self, source: AudioSource = "user") -> None:
+        self._mark_live_user_activity()
         if self._active_stage not in {"tts", "playback"}:
             return
         if source != "user":
@@ -508,7 +551,7 @@ class ConversationOrchestrator:
 
     async def _run(self) -> None:
         while True:
-            segment, task_done = await self._await_next_segment()
+            work_item, task_done = await self._await_next_work_item()
             self._turn_counter += 1
             context = TurnContext(
                 session_id=self.session.session_id,
@@ -518,7 +561,19 @@ class ConversationOrchestrator:
             self._active_context = context
             self._active_stage = None
             try:
-                await self._process_turn(segment=segment, context=context, cancellation=cancellation)
+                if isinstance(work_item, _ProactiveTurnRequest):
+                    self._active_proactive_observation_version = work_item.observation_version
+                    await self._process_proactive_turn(
+                        request=work_item,
+                        context=context,
+                        cancellation=cancellation,
+                    )
+                else:
+                    await self._process_turn(
+                        segment=work_item,
+                        context=context,
+                        cancellation=cancellation,
+                    )
             except TurnCancelledError:
                 self._emit_event(
                     ConversationEvent(
@@ -542,6 +597,12 @@ class ConversationOrchestrator:
                     error=str(exc),
                 )
             finally:
+                if (
+                    isinstance(work_item, _ProactiveTurnRequest)
+                    and self._active_proactive_observation_version
+                    == work_item.observation_version
+                ):
+                    self._active_proactive_observation_version = None
                 if self._active_context == context:
                     self._active_context = None
                     self._active_stage = None
@@ -581,10 +642,12 @@ class ConversationOrchestrator:
                 text=transcription.text,
             )
         )
+        self._mark_live_user_activity()
         session_message_text = _build_session_message_text(segment, transcription.text)
         if segment.source == "application_audio":
             self.session.append_application_message(session_message_text)
             if self._should_capture_application_audio_as_context(segment):
+                self._record_proactive_application_audio_observation(segment)
                 self._active_stage = None
                 self.metrics.record_duration(
                     stage="turn_total",
@@ -609,6 +672,7 @@ class ConversationOrchestrator:
                     text=transcription.text,
                     audio_source=segment.source,
                 )
+                self._record_proactive_microphone_observation(segment)
                 self._active_stage = None
                 self.metrics.record_duration(
                     stage="turn_total",
@@ -632,6 +696,7 @@ class ConversationOrchestrator:
         self._active_stage = "llm"
         with timed_stage(self.metrics, "llm", context):
             response = await self.language_model.generate(request, cancellation=cancellation)
+        response = _normalize_assistant_response(response)
         log_event(
             self.logger,
             "response_ready",
@@ -669,7 +734,69 @@ class ConversationOrchestrator:
             context=context,
         )
 
-    async def _await_next_segment(self) -> tuple[AudioSegment, Callable[[], None]]:
+    async def _process_proactive_turn(
+        self,
+        request: _ProactiveTurnRequest,
+        context: TurnContext,
+        cancellation: CancellationToken,
+    ) -> None:
+        if not self._is_current_proactive_observation(request.observation_version):
+            return
+        turn_started_ms = monotonic_ms()
+        proactive_request = ConversationRequest(
+            context=context,
+            messages=self._build_proactive_request_messages(),
+            current_user_parts=self._build_proactive_current_user_parts(),
+        )
+        self._active_stage = "llm"
+        with timed_stage(self.metrics, "llm", context):
+            response = await self.language_model.generate(
+                proactive_request,
+                cancellation=cancellation,
+            )
+        response = _normalize_assistant_response(response)
+        log_event(
+            self.logger,
+            "response_ready",
+            session_id=context.session_id,
+            turn_id=context.turn_id,
+            text=response.text,
+            llm_provider=response.provider,
+            proactive=True,
+        )
+        self._emit_event(
+            ConversationEvent(
+                type="response_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=response.text,
+            )
+        )
+        self._active_stage = "tts"
+        await self._play_response(response=response, context=context, cancellation=cancellation)
+        committed_at_ms = monotonic_ms()
+        self.session.append_assistant_message(response.text)
+        self._last_assistant_response_ms = committed_at_ms
+        self._last_proactive_response_ms = committed_at_ms
+        self._consume_proactive_observation(request.observation_version)
+        self._emit_event(
+            ConversationEvent(
+                type="assistant_message_committed",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=response.text,
+            )
+        )
+        self._active_stage = None
+        self.metrics.record_duration(
+            stage="turn_total",
+            duration_ms=committed_at_ms - turn_started_ms,
+            context=context,
+        )
+
+    async def _await_next_work_item(
+        self,
+    ) -> tuple[AudioSegment | _ProactiveTurnRequest, Callable[[], None]]:
         while True:
             segment = self._queue.get_nowait()
             if segment is not None:
@@ -677,8 +804,21 @@ class ConversationOrchestrator:
             segment = self._application_context_queue.get_nowait()
             if segment is not None:
                 return segment, self._application_context_queue.task_done
+            proactive_request = self._proactive_queue.get_nowait()
+            if proactive_request is not None:
+                if self._queued_proactive_observation_version == proactive_request.observation_version:
+                    self._queued_proactive_observation_version = None
+                if not self._should_run_proactive_request(proactive_request):
+                    self._proactive_queue.task_done()
+                    self._set_idle_if_drained()
+                    continue
+                return proactive_request, self._proactive_queue.task_done
             self._work_available.clear()
-            if not self._queue.empty() or not self._application_context_queue.empty():
+            if (
+                not self._queue.empty()
+                or not self._application_context_queue.empty()
+                or not self._proactive_queue.empty()
+            ):
                 self._work_available.set()
                 continue
             await self._work_available.wait()
@@ -754,12 +894,189 @@ class ConversationOrchestrator:
             and self._pending_application_segment is None
             and self._queue.empty()
             and self._application_context_queue.empty()
+            and self._proactive_queue.empty()
             and not self._interruptions.has_active_turn
         ):
             if not self._idle_event.is_set():
                 self._idle_event.set()
                 return True
         return False
+
+    def _mark_live_user_activity(self) -> None:
+        self._last_user_activity_ms = monotonic_ms()
+
+    def _record_proactive_microphone_observation(self, segment: AudioSegment) -> None:
+        if not self.settings.proactive.enabled or not self.settings.proactive.microphone_enabled:
+            return
+        if not self._is_microphone_user_segment(segment):
+            return
+        self._record_proactive_observation()
+
+    def _record_proactive_application_audio_observation(self, segment: AudioSegment) -> None:
+        if (
+            not self.settings.proactive.enabled
+            or not self.settings.proactive.application_audio_enabled
+        ):
+            return
+        if segment.source != "application_audio":
+            return
+        if self.settings.application_audio.mode is not ApplicationAudioMode.CONTEXT_ONLY:
+            return
+        self._record_proactive_observation()
+
+    def _record_proactive_observation(self) -> None:
+        self._proactive_observation_version += 1
+        self._has_new_proactive_observation = True
+
+    def _consume_proactive_observation(self, observation_version: int) -> None:
+        if self._proactive_observation_version == observation_version:
+            self._has_new_proactive_observation = False
+
+    def _clear_proactive_observations(self) -> None:
+        self._discard_pending_proactive_turns()
+        self._last_proactive_screen_poll_ms = None
+        self._proactive_screen_failure_backoff_until_ms = None
+        self._latest_proactive_screen_capture = None
+        self._latest_proactive_screen_capture_fingerprint = None
+        self._has_new_proactive_observation = False
+        self._proactive_observation_version = 0
+        self._active_proactive_observation_version = None
+
+    def _discard_pending_proactive_turns(self) -> None:
+        _drain_queue(self._proactive_queue)
+        self._queued_proactive_observation_version = None
+
+    def _is_current_proactive_observation(self, observation_version: int) -> bool:
+        return (
+            self.settings.proactive.enabled
+            and self._has_new_proactive_observation
+            and observation_version == self._proactive_observation_version
+        )
+
+    def _is_assistant_idle_for_proactive_work(self) -> bool:
+        return (
+            self._active_context is None
+            and self._active_stage is None
+            and self._pending_live_segment is None
+            and self._pending_application_segment is None
+            and self._queue.empty()
+            and self._application_context_queue.empty()
+            and self._proactive_queue.empty()
+            and not self._interruptions.has_active_turn
+        )
+
+    def _can_start_proactive_turn(self, *, now_ms: float) -> bool:
+        if not self.settings.proactive.enabled or not self._has_new_proactive_observation:
+            return False
+        if not self._is_assistant_idle_for_proactive_work():
+            return False
+        if self._last_user_activity_ms is None:
+            return False
+        if (
+            now_ms - self._last_user_activity_ms
+        ) < (self.settings.proactive.idle_seconds * 1000.0):
+            return False
+        if self._last_proactive_response_ms is None:
+            return True
+        return (
+            now_ms - self._last_proactive_response_ms
+        ) >= (self.settings.proactive.cooldown_seconds * 1000.0)
+
+    def _should_run_proactive_request(self, request: _ProactiveTurnRequest) -> bool:
+        if not self._is_current_proactive_observation(request.observation_version):
+            return False
+        return self._can_start_proactive_turn(now_ms=monotonic_ms())
+
+    async def _run_proactive_monitor(self) -> None:
+        try:
+            while True:
+                await self._poll_proactive_screen_if_due()
+                await self._maybe_enqueue_proactive_turn()
+                await asyncio.sleep(_PROACTIVE_MONITOR_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+    async def _maybe_enqueue_proactive_turn(self) -> None:
+        if not self.settings.proactive.enabled:
+            return
+        if not self._can_start_proactive_turn(now_ms=monotonic_ms()):
+            return
+        observation_version = self._proactive_observation_version
+        if self._queued_proactive_observation_version == observation_version:
+            return
+        if self._active_proactive_observation_version == observation_version:
+            return
+        self._idle_event.clear()
+        accepted = await self._proactive_queue.put(
+            _ProactiveTurnRequest(observation_version=observation_version)
+        )
+        if not accepted:
+            self._set_idle_if_drained()
+            return
+        self._queued_proactive_observation_version = observation_version
+        self._work_available.set()
+
+    async def _poll_proactive_screen_if_due(self) -> None:
+        if not self._proactive_screen_capture_supported():
+            return
+        if not self._is_assistant_idle_for_proactive_work():
+            return
+        now_ms = monotonic_ms()
+        if self._last_user_activity_ms is None:
+            return
+        if (
+            now_ms - self._last_user_activity_ms
+        ) < (self.settings.proactive.idle_seconds * 1000.0):
+            return
+        backoff_until_ms = self._proactive_screen_failure_backoff_until_ms
+        if backoff_until_ms is not None and now_ms < backoff_until_ms:
+            return
+        last_poll_ms = self._last_proactive_screen_poll_ms
+        if (
+            last_poll_ms is not None
+            and (now_ms - last_poll_ms) < (self.settings.proactive.screen_poll_seconds * 1000.0)
+        ):
+            return
+        self._last_proactive_screen_poll_ms = now_ms
+        try:
+            screenshot = await self.screen_capture_engine.capture(
+                context=TurnContext(
+                    session_id=self.session.session_id,
+                    turn_id=self._turn_counter + 1,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._proactive_screen_failure_backoff_until_ms = (
+                now_ms + (_PROACTIVE_SCREEN_FAILURE_BACKOFF_SECONDS * 1000.0)
+            )
+            log_event(
+                self.logger,
+                "proactive_screen_capture_failed",
+                session_id=self.session.session_id,
+                screen_capture_provider=self.screen_capture_engine.name,
+                screen_window_name=self.settings.screen_capture.window_name,
+                error=str(exc),
+                retry_after_seconds=_PROACTIVE_SCREEN_FAILURE_BACKOFF_SECONDS,
+            )
+            return
+        self._proactive_screen_failure_backoff_until_ms = None
+        screenshot_fingerprint = _screen_capture_fingerprint(screenshot)
+        if screenshot_fingerprint == self._latest_proactive_screen_capture_fingerprint:
+            return
+        self._latest_proactive_screen_capture = screenshot
+        self._latest_proactive_screen_capture_fingerprint = screenshot_fingerprint
+        self._record_proactive_observation()
+
+    def _proactive_screen_capture_supported(self) -> bool:
+        return (
+            self.settings.proactive.enabled
+            and self.settings.proactive.screen_enabled
+            and self.settings.screen_capture.enabled
+            and self.screen_capture_engine is not None
+            and self.language_model.supports_multimodal_input
+        )
 
     def _should_debounce_live_segment(self, segment: AudioSegment) -> bool:
         return (
@@ -898,6 +1215,44 @@ class ConversationOrchestrator:
             )
         return tuple(messages)
 
+    def _build_proactive_request_messages(self) -> tuple[ConversationMessage, ...]:
+        messages = list(
+            self._build_request_messages(
+                conversation_language=self.settings.conversation.language
+            )
+        )
+        messages.insert(
+            0,
+            ConversationMessage(
+                role="system",
+                content=_build_proactive_system_instruction(),
+            ),
+        )
+        return tuple(messages)
+
+    def _build_proactive_current_user_parts(self) -> tuple[ConversationRequestPart, ...]:
+        if not self._proactive_screen_capture_supported():
+            return tuple()
+        screenshot = self._latest_proactive_screen_capture
+        if screenshot is None:
+            return tuple()
+        window_name = self.settings.screen_capture.window_name
+        if window_name:
+            context_text = (
+                f"Configured target window: {window_name}. "
+                "The attached image is the latest changed screenshot observed while the user "
+                "was quiet."
+            )
+        else:
+            context_text = (
+                "The attached image is the latest changed screenshot observed while the user "
+                "was quiet."
+            )
+        return (
+            ConversationTextPart(text=context_text),
+            screenshot,
+        )
+
     def _emit_event(self, event: ConversationEvent) -> None:
         try:
             self.event_sink.emit(event)
@@ -929,6 +1284,7 @@ class ConversationOrchestrator:
             settings=self.settings.reply,
             last_assistant_response_ms=self._last_assistant_response_ms,
             now_ms=monotonic_ms(),
+            assistant_names=_assistant_names_for_interrupt(self.settings),
         )
 
     async def _maybe_capture_current_user_parts(
@@ -1268,6 +1624,16 @@ def _build_conversation_language_instruction(language: str | None) -> str | None
     )
 
 
+def _build_proactive_system_instruction() -> str:
+    return (
+        "The user has not made a direct request right now. "
+        "If you speak, keep it to one or two short sentences. "
+        "Do not start a full back-and-forth or narrate continuously. "
+        "Only react to immediate live context that is already present in the conversation "
+        "history or attached turn data."
+    )
+
+
 def _build_session_message_text(segment: AudioSegment, transcription_text: str) -> str:
     normalized_text = transcription_text.strip()
     if segment.source != "application_audio":
@@ -1399,11 +1765,11 @@ def _segment_duration_ms(segment: AudioSegment) -> float:
     return (len(segment.pcm) / bytes_per_second) * 1000.0
 
 
-def _drain_queue(queue: BoundedAsyncQueue[AudioSegment]) -> int:
+def _drain_queue(queue: BoundedAsyncQueue[object]) -> int:
     drained_count = 0
     while True:
-        segment = queue.get_nowait()
-        if segment is None:
+        item = queue.get_nowait()
+        if item is None:
             return drained_count
         queue.task_done()
         drained_count += 1
@@ -1434,6 +1800,23 @@ def _split_response_for_playback(text: str) -> tuple[str, ...]:
         if trailing_chunk:
             chunks.append(trailing_chunk)
     return tuple(chunks) if chunks else (normalized_text,)
+
+
+def _normalize_assistant_response(response: AssistantResponse) -> AssistantResponse:
+    normalized_text = _normalize_assistant_response_text(response.text)
+    if normalized_text == response.text:
+        return response
+    return AssistantResponse(text=normalized_text, provider=response.provider)
+
+
+def _normalize_assistant_response_text(text: str) -> str:
+    stripped_text = text.strip()
+    if not stripped_text:
+        return stripped_text
+    lines = [line.strip() for line in stripped_text.splitlines() if line.strip()]
+    if not lines:
+        return stripped_text
+    return " ".join(lines)
 
 
 async def _discard_background_task(task: asyncio.Task[_SynthesizedChunk] | None) -> None:

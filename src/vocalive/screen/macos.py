@@ -13,7 +13,7 @@ from vocalive.pipeline.interruption import CancellationToken
 from vocalive.screen.base import ScreenCaptureEngine
 
 
-_WINDOW_QUERY_HELPER_BUILD_TIMEOUT_FLOOR_SECONDS = 10.0
+_WINDOW_QUERY_HELPER_BUILD_TIMEOUT_FLOOR_SECONDS = 30.0
 _WINDOW_QUERY_HELPER_DIR = Path(tempfile.gettempdir()) / "vocalive-screen-capture"
 _WINDOW_QUERY_HELPER_SOURCE = """
 #import <CoreGraphics/CoreGraphics.h>

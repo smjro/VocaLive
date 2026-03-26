@@ -139,6 +139,9 @@ Microphone tuning notes:
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
 - after one live utterance is emitted, VocaLive waits briefly before queueing the LLM turn so closely spaced microphone utterances can merge; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
 - microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
+- if you want the assistant to stay quiet during think-alouds or read-alouds and only answer clear prompts, set `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true`
+- `VOCALIVE_PROACTIVE_ENABLED=true` adds a low-priority proactive monologue lane that can speak after a quiet period when new microphone, application-audio, or screenshot observations are available
+- proactive screenshot observations require the normal screen-capture path to be enabled as well; unchanged screenshots are ignored and the latest changed image is reused only as request-scoped context
 - in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant, and `disabled` turns early microphone barge-in off
 - `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; after each closed interval, the next user speech starts the next open window, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends the gating itself to application audio
 - `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY=clear` keeps the previous behavior of starting fresh on reopen; `resume_summary` uses a neutral Gemini pass to prepare a carry-forward resume note during the closed interval and injects that note into the next window instead
@@ -263,6 +266,14 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
 | `VOCALIVE_REPLY_MIN_GAP_MS` | `6000.0` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
 | `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |
+| `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER` | `false` | When true, microphone turns only trigger replies when they clearly look like questions/requests or directly address the assistant; useful for suppressing think-aloud or read-aloud chatter |
+| `VOCALIVE_PROACTIVE_ENABLED` | `false` | Enables low-priority proactive monologues when the user has been quiet and new live observations are available |
+| `VOCALIVE_PROACTIVE_MICROPHONE_ENABLED` | `true` | Allows finalized microphone utterances that did not trigger an immediate reply to become proactive-monologue candidates |
+| `VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED` | `true` | Allows new `context_only` application-audio transcripts to become proactive-monologue candidates |
+| `VOCALIVE_PROACTIVE_SCREEN_ENABLED` | `true` | Allows proactive monologues to watch for changed screenshots when screen capture is enabled and multimodal input is available |
+| `VOCALIVE_PROACTIVE_IDLE_SECONDS` | `20.0` | Minimum quiet time after the latest live user/application activity before a proactive monologue may start |
+| `VOCALIVE_PROACTIVE_COOLDOWN_SECONDS` | `45.0` | Minimum delay between completed proactive monologues |
+| `VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS` | `10.0` | How often proactive mode polls the configured window for changed screenshots while idle |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30.0` | Gemini HTTP timeout |

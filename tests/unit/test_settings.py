@@ -492,6 +492,7 @@ class AppSettingsTests(unittest.TestCase):
                 "VOCALIVE_REPLY_POLICY_ENABLED": "false",
                 "VOCALIVE_REPLY_MIN_GAP_MS": "4200",
                 "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS": "9",
+                "VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER": "true",
             },
             clear=True,
         ):
@@ -501,6 +502,58 @@ class AppSettingsTests(unittest.TestCase):
         self.assertFalse(settings.reply.policy_enabled)
         self.assertEqual(settings.reply.min_gap_ms, 4200.0)
         self.assertEqual(settings.reply.short_utterance_max_chars, 9)
+        self.assertTrue(settings.reply.require_explicit_trigger)
+
+    def test_from_env_reads_proactive_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "VOCALIVE_PROACTIVE_ENABLED": "true",
+                "VOCALIVE_PROACTIVE_MICROPHONE_ENABLED": "false",
+                "VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED": "false",
+                "VOCALIVE_PROACTIVE_SCREEN_ENABLED": "false",
+                "VOCALIVE_PROACTIVE_IDLE_SECONDS": "12.5",
+                "VOCALIVE_PROACTIVE_COOLDOWN_SECONDS": "33.0",
+                "VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS": "4.0",
+            },
+            clear=True,
+        ):
+            settings = AppSettings.from_env()
+
+        self.assertTrue(settings.proactive.enabled)
+        self.assertFalse(settings.proactive.microphone_enabled)
+        self.assertFalse(settings.proactive.application_audio_enabled)
+        self.assertFalse(settings.proactive.screen_enabled)
+        self.assertEqual(settings.proactive.idle_seconds, 12.5)
+        self.assertEqual(settings.proactive.cooldown_seconds, 33.0)
+        self.assertEqual(settings.proactive.screen_poll_seconds, 4.0)
+
+    def test_from_env_rejects_non_positive_proactive_idle_seconds(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_PROACTIVE_IDLE_SECONDS": "0"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "VOCALIVE_PROACTIVE_IDLE_SECONDS"):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_negative_proactive_cooldown_seconds(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_PROACTIVE_COOLDOWN_SECONDS": "-1"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "VOCALIVE_PROACTIVE_COOLDOWN_SECONDS"):
+                AppSettings.from_env()
+
+    def test_from_env_rejects_non_positive_proactive_screen_poll_seconds(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS": "0"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS"):
+                AppSettings.from_env()
 
     def test_from_env_defaults_screen_capture_triggers(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -525,6 +578,14 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(settings.reply.policy_enabled)
         self.assertEqual(settings.reply.min_gap_ms, 6000.0)
         self.assertEqual(settings.reply.short_utterance_max_chars, 12)
+        self.assertFalse(settings.reply.require_explicit_trigger)
+        self.assertFalse(settings.proactive.enabled)
+        self.assertTrue(settings.proactive.microphone_enabled)
+        self.assertTrue(settings.proactive.application_audio_enabled)
+        self.assertTrue(settings.proactive.screen_enabled)
+        self.assertEqual(settings.proactive.idle_seconds, 20.0)
+        self.assertEqual(settings.proactive.cooldown_seconds, 45.0)
+        self.assertEqual(settings.proactive.screen_poll_seconds, 10.0)
         self.assertEqual(settings.input.interrupt_mode, MicrophoneInterruptMode.ALWAYS)
         self.assertEqual(
             settings.conversation_window.reset_policy,
@@ -627,6 +688,14 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_REPLY_POLICY_ENABLED",
             "VOCALIVE_REPLY_MIN_GAP_MS",
             "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
+            "VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER",
+            "VOCALIVE_PROACTIVE_ENABLED",
+            "VOCALIVE_PROACTIVE_MICROPHONE_ENABLED",
+            "VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED",
+            "VOCALIVE_PROACTIVE_SCREEN_ENABLED",
+            "VOCALIVE_PROACTIVE_IDLE_SECONDS",
+            "VOCALIVE_PROACTIVE_COOLDOWN_SECONDS",
+            "VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS",
             "VOCALIVE_GEMINI_API_KEY",
             "VOCALIVE_GEMINI_MODEL",
             "VOCALIVE_GEMINI_TIMEOUT_SECONDS",

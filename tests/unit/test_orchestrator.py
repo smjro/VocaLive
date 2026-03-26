@@ -26,6 +26,7 @@ from vocalive.config.settings import (
     InputProvider,
     InputSettings,
     MicrophoneInterruptMode,
+    ProactiveSettings,
     QueueSettings,
     QueueOverflowStrategy,
     ReplySettings,
@@ -68,6 +69,25 @@ class CapturingLanguageModel(LanguageModel):
 
 class MultimodalCapturingLanguageModel(CapturingLanguageModel):
     supports_multimodal_input = True
+
+
+class SequencedCapturingLanguageModel(CapturingLanguageModel):
+    def __init__(self, responses: tuple[str, ...]) -> None:
+        super().__init__()
+        self.responses = responses
+
+    async def generate(
+        self,
+        request: ConversationRequest,
+        cancellation: CancellationToken | None = None,
+    ) -> AssistantResponse:
+        del cancellation
+        self.requests.append(request)
+        response_index = min(len(self.requests), len(self.responses)) - 1
+        return AssistantResponse(
+            text=self.responses[response_index],
+            provider="capture",
+        )
 
 
 class StaticLanguageModel(LanguageModel):
@@ -166,6 +186,23 @@ class CancelledScreenCaptureEngine(ScreenCaptureEngine):
     ) -> ConversationInlineDataPart:
         del context, cancellation
         raise TurnCancelledError("turn cancelled")
+
+
+class FailingScreenCaptureEngine(ScreenCaptureEngine):
+    name = "failing-screen"
+
+    def __init__(self, error_message: str) -> None:
+        self.error_message = error_message
+        self.calls = 0
+
+    async def capture(
+        self,
+        context: TurnContext,
+        cancellation: CancellationToken | None = None,
+    ) -> ConversationInlineDataPart:
+        del context, cancellation
+        self.calls += 1
+        raise RuntimeError(self.error_message)
 
 
 class CountingSpeechToTextEngine(MockSpeechToTextEngine):
@@ -496,6 +533,95 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(output.stop_calls, 0)
         self.assertEqual(output.interrupted_texts, [])
+
+    async def test_user_speech_start_resets_proactive_idle_timer(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        orchestrator._record_proactive_observation()
+        orchestrator._last_user_activity_ms = 0.0
+
+        self.assertTrue(orchestrator._can_start_proactive_turn(now_ms=1000.0))
+
+        await orchestrator.handle_user_speech_start(source="user")
+
+        self.assertIsNotNone(orchestrator._last_user_activity_ms)
+        assert orchestrator._last_user_activity_ms is not None
+        self.assertGreater(orchestrator._last_user_activity_ms, 0.0)
+        self.assertFalse(
+            orchestrator._can_start_proactive_turn(
+                now_ms=orchestrator._last_user_activity_ms + 1.0
+            )
+        )
+
+    async def test_application_audio_speech_start_resets_proactive_idle_timer(self) -> None:
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                application_audio=ApplicationAudioSettings(
+                    enabled=True,
+                    mode=ApplicationAudioMode.CONTEXT_ONLY,
+                    target="Steam",
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    microphone_enabled=False,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=EchoLanguageModel(delay_seconds=0.0),
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        self.addAsyncCleanup(orchestrator.stop)
+
+        orchestrator._record_proactive_observation()
+        orchestrator._last_user_activity_ms = 0.0
+
+        self.assertTrue(orchestrator._can_start_proactive_turn(now_ms=1000.0))
+
+        await orchestrator.handle_user_speech_start(source="application_audio")
+
+        self.assertIsNotNone(orchestrator._last_user_activity_ms)
+        assert orchestrator._last_user_activity_ms is not None
+        self.assertGreater(orchestrator._last_user_activity_ms, 0.0)
+        self.assertFalse(
+            orchestrator._can_start_proactive_turn(
+                now_ms=orchestrator._last_user_activity_ms + 1.0
+            )
+        )
 
     async def test_user_speech_start_does_not_cancel_screen_capture_stage(self) -> None:
         token = self.orchestrator._interruptions.begin_turn()
@@ -1056,6 +1182,439 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 ("assistant", "captured"),
                 ("user", "なんで？"),
                 ("assistant", "captured"),
+            ],
+        )
+
+    async def test_require_explicit_trigger_suppresses_read_aloud_monologue(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("なぜ世界は滅びたのかという古い文書らしい")
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(language_model.requests, [])
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [("user", "なぜ世界は滅びたのかという古い文書らしい")],
+        )
+
+    async def test_require_explicit_trigger_allows_direct_assistant_address(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("コハク さっきの続きなんだけど")
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "コハク さっきの続きなんだけど"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_suppressed_microphone_turn_can_trigger_proactive_reply(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("なぜ世界は滅びたのかという古い文書らしい")
+            )
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: len(language_model.requests) == 1, timeout_seconds=1.0)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertIn(
+            "The user has not made a direct request right now.",
+            language_model.requests[0].messages[0].content,
+        )
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "なぜ世界は滅びたのかという古い文書らしい"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_explicit_microphone_reply_does_not_schedule_proactive_follow_up(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("なんで？"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+            await asyncio.sleep(0.2)
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "なんで？"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_context_only_application_audio_can_trigger_proactive_reply(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                application_audio=ApplicationAudioSettings(
+                    mode=ApplicationAudioMode.CONTEXT_ONLY,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    microphone_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_enabled=False,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "ボスが来た",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: len(language_model.requests) == 1, timeout_seconds=1.0)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("application", "Application audio (Steam): ボスが来た"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_application_audio_respond_mode_does_not_schedule_extra_proactive_reply(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                application_audio=ApplicationAudioSettings(
+                    mode=ApplicationAudioMode.RESPOND,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    microphone_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_enabled=False,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "ボスが来た",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+            await asyncio.sleep(0.2)
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("application", "Application audio (Steam): ボスが来た"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_proactive_screen_capture_uses_changed_image_without_repeating_same_frame(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    microphone_enabled=False,
+                    application_audio_enabled=False,
+                    screen_enabled=True,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=0.05,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="YouTube",
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            await self._wait_for(lambda: len(language_model.requests) == 1, timeout_seconds=1.0)
+            await orchestrator.wait_for_idle()
+            await asyncio.sleep(0.2)
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            language_model.requests[0].current_user_parts,
+            (
+                ConversationTextPart(
+                    text=(
+                        "Configured target window: YouTube. "
+                        "The attached image is the latest changed screenshot observed while the "
+                        "user was quiet."
+                    )
+                ),
+                ConversationInlineDataPart(mime_type="image/png", data=b"png-bytes"),
+            ),
+        )
+
+    async def test_proactive_screen_capture_failure_is_rate_limited(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = FailingScreenCaptureEngine(
+            "macOS window lookup helper build timed out"
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    microphone_enabled=False,
+                    application_audio_enabled=False,
+                    screen_enabled=True,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=0.05,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="Google Chrome",
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            await asyncio.sleep(0.25)
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, 1)
+        self.assertEqual(language_model.requests, [])
+
+    async def test_proactive_reply_waits_for_active_playback_to_finish(self) -> None:
+        language_model = SequencedCapturingLanguageModel(
+            ("A fairly long first sentence.", "proactive captured")
+        )
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.DISABLED,
+                ),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=RecordingTextToSpeechEngine(),
+            audio_output=output,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("なんで？"))
+            self.assertTrue(accepted)
+            await self._wait_for(
+                lambda: output.started_texts == ["A fairly long first sentence."],
+                timeout_seconds=1.0,
+            )
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("古い本をそのまま読んでるだけ")
+            )
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: len(language_model.requests) == 2, timeout_seconds=1.5)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(output.interrupted_texts, [])
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "なんで？"),
+                ("assistant", "A fairly long first sentence."),
+                ("user", "古い本をそのまま読んでるだけ"),
+                ("assistant", "proactive captured"),
             ],
         )
 
@@ -1726,6 +2285,60 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [message.content for message in orchestrator.session.snapshot()],
             ["hello", response_text],
+        )
+
+    async def test_multiline_response_is_flattened_before_playback_and_commit(self) -> None:
+        response_text = "最初の文です。\n次の文です！\n\n最後の文です"
+        event_sink = RecordingEventSink()
+        output = MemoryAudioOutput()
+        tts_engine = RecordingTextToSpeechEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=StaticLanguageModel(response_text),
+            tts_engine=tts_engine,
+            audio_output=output,
+            event_sink=event_sink,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("hello"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        flattened_text = "最初の文です。 次の文です！ 最後の文です"
+        self.assertEqual(
+            tts_engine.started_texts,
+            ["最初の文です。", "次の文です！", "最後の文です"],
+        )
+        self.assertEqual(
+            output.completed_texts,
+            ["最初の文です。", "次の文です！", "最後の文です"],
+        )
+        self.assertEqual(
+            [message.content for message in orchestrator.session.snapshot()],
+            ["hello", flattened_text],
+        )
+        self.assertEqual(
+            [event.text for event in event_sink.events if event.type == "response_ready"],
+            [flattened_text],
+        )
+        self.assertEqual(
+            [
+                event.text
+                for event in event_sink.events
+                if event.type == "assistant_message_committed"
+            ],
+            [flattened_text],
         )
 
     async def test_next_sentence_tts_is_prefetched_during_current_playback(self) -> None:

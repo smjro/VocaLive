@@ -223,6 +223,10 @@ def build_audio_input(settings: AppSettings) -> AudioInput | None:
                         settings.conversation_window.enabled
                         and settings.conversation_window.apply_to_application_audio
                     )
+                    or (
+                        settings.proactive.enabled
+                        and settings.proactive.application_audio_enabled
+                    )
                 ),
             )
         )

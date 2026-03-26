@@ -70,6 +70,9 @@ The current entry point is `src/vocalive/main.py`.
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
 - microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
 - microphone reply suppression is enabled by default for low-value live chatter; explicit questions/requests still bypass the policy
+- `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true` makes microphone replies opt-in so think-aloud or read-aloud speech stays silent unless it clearly addresses the assistant or asks for something
+- `VOCALIVE_PROACTIVE_ENABLED=true` adds a low-priority proactive monologue lane that can speak after a quiet period when new microphone, application-audio, or screenshot observations are available
+- proactive screenshot observations reuse the existing screen-capture path; keep `VOCALIVE_SCREEN_CAPTURE_ENABLED=true` and a configured window name when you want changed screenshots to feed proactive turns
 - older application-audio context is compacted into its own bounded summary while the newest configured app-audio messages stay verbatim in Gemini requests
 - `VOCALIVE_MIC_DEVICE=external` forces selection of a connected external mic, including Bluetooth hands-free inputs when they are the best match
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected higher-fidelity external mic over a built-in default input and skips Bluetooth hands-free / AG Audio inputs during auto-selection
@@ -162,6 +165,14 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
 | `VOCALIVE_REPLY_MIN_GAP_MS` | `6000.0` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
 | `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |
+| `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER` | `false` | When true, microphone turns only trigger replies when they clearly look like questions/requests or directly address the assistant; useful for suppressing think-aloud or read-aloud chatter |
+| `VOCALIVE_PROACTIVE_ENABLED` | `false` | Enables low-priority proactive monologues when the user has been quiet and new live observations are available |
+| `VOCALIVE_PROACTIVE_MICROPHONE_ENABLED` | `true` | Allows finalized microphone utterances that did not trigger an immediate reply to become proactive-monologue candidates |
+| `VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED` | `true` | Allows new `context_only` application-audio transcripts to become proactive-monologue candidates |
+| `VOCALIVE_PROACTIVE_SCREEN_ENABLED` | `true` | Allows proactive monologues to watch for changed screenshots when screen capture is enabled and multimodal input is available |
+| `VOCALIVE_PROACTIVE_IDLE_SECONDS` | `20.0` | Minimum quiet time after the latest live user/application activity before a proactive monologue may start |
+| `VOCALIVE_PROACTIVE_COOLDOWN_SECONDS` | `45.0` | Minimum delay between completed proactive monologues |
+| `VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS` | `10.0` | How often proactive mode polls the configured window for changed screenshots while idle |
 | `VOCALIVE_GEMINI_API_KEY` | unset | Gemini API key; `GEMINI_API_KEY` is also accepted |
 | `VOCALIVE_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name used for `generateContent` |
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30.0` | Gemini HTTP timeout |

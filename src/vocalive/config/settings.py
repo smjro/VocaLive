@@ -355,6 +355,24 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_REPLY_MIN_GAP_MS", "reply", "float", "6000.0"),
     SettingDefinition("VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS", "reply", "int", "12"),
     SettingDefinition(
+        "VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER",
+        "reply",
+        "bool",
+        "false",
+    ),
+    SettingDefinition("VOCALIVE_PROACTIVE_ENABLED", "proactive", "bool", "false"),
+    SettingDefinition("VOCALIVE_PROACTIVE_MICROPHONE_ENABLED", "proactive", "bool", "true"),
+    SettingDefinition(
+        "VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED",
+        "proactive",
+        "bool",
+        "true",
+    ),
+    SettingDefinition("VOCALIVE_PROACTIVE_SCREEN_ENABLED", "proactive", "bool", "true"),
+    SettingDefinition("VOCALIVE_PROACTIVE_IDLE_SECONDS", "proactive", "float", "20.0"),
+    SettingDefinition("VOCALIVE_PROACTIVE_COOLDOWN_SECONDS", "proactive", "float", "45.0"),
+    SettingDefinition("VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS", "proactive", "float", "10.0"),
+    SettingDefinition(
         "VOCALIVE_GEMINI_API_KEY",
         "gemini",
         "string",
@@ -721,6 +739,46 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS": SettingDocumentation(
         description="Maximum normalized length treated as a short microphone reaction for suppression heuristics"
     ),
+    "VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER": SettingDocumentation(
+        description=(
+            "When true, microphone turns only trigger replies when they clearly look like "
+            "questions/requests or directly address the assistant; useful for suppressing "
+            "think-aloud or read-aloud chatter"
+        )
+    ),
+    "VOCALIVE_PROACTIVE_ENABLED": SettingDocumentation(
+        description=(
+            "Enables low-priority proactive monologues when the user has been quiet and "
+            "new live observations are available"
+        )
+    ),
+    "VOCALIVE_PROACTIVE_MICROPHONE_ENABLED": SettingDocumentation(
+        description=(
+            "Allows finalized microphone utterances that did not trigger an immediate reply "
+            "to become proactive-monologue candidates"
+        )
+    ),
+    "VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED": SettingDocumentation(
+        description=(
+            "Allows new `context_only` application-audio transcripts to become proactive-"
+            "monologue candidates"
+        )
+    ),
+    "VOCALIVE_PROACTIVE_SCREEN_ENABLED": SettingDocumentation(
+        description=(
+            "Allows proactive monologues to watch for changed screenshots when screen "
+            "capture is enabled and multimodal input is available"
+        )
+    ),
+    "VOCALIVE_PROACTIVE_IDLE_SECONDS": SettingDocumentation(
+        description="Minimum quiet time after the latest live user/application activity before a proactive monologue may start"
+    ),
+    "VOCALIVE_PROACTIVE_COOLDOWN_SECONDS": SettingDocumentation(
+        description="Minimum delay between completed proactive monologues"
+    ),
+    "VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS": SettingDocumentation(
+        description="How often proactive mode polls the configured window for changed screenshots while idle"
+    ),
     "VOCALIVE_GEMINI_API_KEY": SettingDocumentation(
         description="Gemini API key; `GEMINI_API_KEY` is also accepted"
     ),
@@ -967,6 +1025,18 @@ class ReplySettings:
     policy_enabled: bool = True
     min_gap_ms: float = 6000.0
     short_utterance_max_chars: int = 12
+    require_explicit_trigger: bool = False
+
+
+@dataclass
+class ProactiveSettings:
+    enabled: bool = False
+    microphone_enabled: bool = True
+    application_audio_enabled: bool = True
+    screen_enabled: bool = True
+    idle_seconds: float = 20.0
+    cooldown_seconds: float = 45.0
+    screen_poll_seconds: float = 10.0
 
 
 @dataclass
@@ -1050,6 +1120,7 @@ class AppSettings:
     output: OutputSettings = field(default_factory=OutputSettings)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
     reply: ReplySettings = field(default_factory=ReplySettings)
+    proactive: ProactiveSettings = field(default_factory=ProactiveSettings)
     gemini: GeminiSettings = field(default_factory=GeminiSettings)
     screen_capture: ScreenCaptureSettings = field(default_factory=ScreenCaptureSettings)
     moonshine: MoonshineSettings = field(default_factory=MoonshineSettings)
@@ -1080,6 +1151,12 @@ class AppSettings:
             raise ValueError(
                 "VOCALIVE_APP_AUDIO_MIN_TRANSCRIPTION_MS must be >= 0"
             )
+        if self.proactive.idle_seconds <= 0:
+            raise ValueError("VOCALIVE_PROACTIVE_IDLE_SECONDS must be > 0")
+        if self.proactive.cooldown_seconds < 0:
+            raise ValueError("VOCALIVE_PROACTIVE_COOLDOWN_SECONDS must be >= 0")
+        if self.proactive.screen_poll_seconds <= 0:
+            raise ValueError("VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS must be > 0")
         if self.aivis.cpu_num_threads is not None and self.aivis.cpu_num_threads < 1:
             raise ValueError(
                 "VOCALIVE_AIVIS_CPU_NUM_THREADS must be >= 1 when set"
@@ -1401,6 +1478,48 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS",
                     default=12,
+                ),
+                require_explicit_trigger=_read_bool(
+                    mapping,
+                    "VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER",
+                    default=False,
+                ),
+            ),
+            proactive=ProactiveSettings(
+                enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_ENABLED",
+                    default=False,
+                ),
+                microphone_enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_MICROPHONE_ENABLED",
+                    default=True,
+                ),
+                application_audio_enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_APPLICATION_AUDIO_ENABLED",
+                    default=True,
+                ),
+                screen_enabled=_read_bool(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_SCREEN_ENABLED",
+                    default=True,
+                ),
+                idle_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_IDLE_SECONDS",
+                    default=20.0,
+                ),
+                cooldown_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_COOLDOWN_SECONDS",
+                    default=45.0,
+                ),
+                screen_poll_seconds=_read_float(
+                    mapping,
+                    "VOCALIVE_PROACTIVE_SCREEN_POLL_SECONDS",
+                    default=10.0,
                 ),
             ),
             gemini=GeminiSettings(
