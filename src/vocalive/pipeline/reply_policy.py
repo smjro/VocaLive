@@ -89,14 +89,14 @@ def decide_reply(
     if not settings.policy_enabled:
         return ReplyDecision(should_reply=True, reason="policy_disabled")
 
-    normalized_text = "".join(text.lower().split())
+    normalized_text = _normalize_text(text)
     if not normalized_text:
         return ReplyDecision(should_reply=False, reason="empty_text")
 
     if looks_like_explicit_assistant_address(text, assistant_names=assistant_names):
         return ReplyDecision(should_reply=True, reason="assistant_addressed")
 
-    if _looks_like_explicit_request(normalized_text):
+    if looks_like_explicit_request(text):
         return ReplyDecision(should_reply=True, reason="explicit_request")
 
     if last_assistant_response_ms is None and normalized_text in _GREETING_MARKERS:
@@ -126,14 +126,21 @@ def looks_like_explicit_assistant_address(
     *,
     assistant_names: tuple[str, ...] = (),
 ) -> bool:
-    normalized_text = "".join(text.lower().split())
+    normalized_text = _normalize_text(text)
     if not normalized_text:
         return False
     for assistant_name in assistant_names:
-        normalized_name = "".join(assistant_name.lower().split())
+        normalized_name = _normalize_text(assistant_name)
         if normalized_name and normalized_name in normalized_text:
             return True
     return any(marker in normalized_text for marker in _ASSISTANT_INVOCATION_MARKERS)
+
+
+def looks_like_explicit_request(text: str) -> bool:
+    normalized_text = _normalize_text(text)
+    if not normalized_text:
+        return False
+    return _looks_like_explicit_request(normalized_text)
 
 
 def _looks_like_explicit_request(normalized_text: str) -> bool:
@@ -159,3 +166,7 @@ def _looks_like_short_reaction(
         or normalized_text.endswith("!")
         or normalized_text.endswith("！")
     )
+
+
+def _normalize_text(text: str) -> str:
+    return "".join(text.lower().split())

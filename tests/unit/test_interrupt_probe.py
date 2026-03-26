@@ -62,6 +62,29 @@ class ExplicitInterruptProbeManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(should_interrupt)
         self.assertEqual(interrupt_reasons, [])
 
+    async def test_probe_segment_detects_explicit_request_when_enabled(self) -> None:
+        stt_engine = StubSpeechToTextEngine("どうする？")
+        manager = ExplicitInterruptProbeManager(
+            get_stt_engine=lambda: stt_engine,
+            get_active_context=lambda: None,
+            get_active_stage=lambda: "llm",
+            get_assistant_names=lambda: ("コハク",),
+            get_session_id=lambda: "session",
+            interrupt_active_turn=lambda reason: _record_interrupt([], reason),
+            logger=logging.getLogger("tests.interrupt_probe"),
+        )
+
+        segment = AudioSegment(pcm=b"\0\0", sample_rate_hz=16_000)
+        prepared_segment, should_interrupt = await manager.probe_segment(
+            segment,
+            session_id="session",
+            turn_id=7,
+            interrupt_on_explicit_request=True,
+        )
+
+        self.assertEqual(prepared_segment.transcript_hint, "どうする？")
+        self.assertTrue(should_interrupt)
+
     def test_build_request_returns_none_without_active_context(self) -> None:
         manager = ExplicitInterruptProbeManager(
             get_stt_engine=lambda: StubSpeechToTextEngine("ignored"),

@@ -705,13 +705,13 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await orchestrator.submit_utterance(AudioSegment.from_text("first"))
         await self._wait_for(lambda: output.started_texts == ["Assistant: first"])
 
-        accepted = await orchestrator.submit_utterance(AudioSegment.from_text("コハク、どうする？"))
+        accepted = await orchestrator.submit_utterance(AudioSegment.from_text("どうする？"))
         self.assertTrue(accepted)
         await orchestrator.wait_for_idle()
 
         self.assertEqual(output.stop_calls, 1)
         self.assertNotIn("Assistant: first", output.completed_texts)
-        self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
+        self.assertIn("Assistant: どうする？", output.completed_texts)
 
     async def test_non_explicit_application_audio_turn_does_not_interrupt_active_playback(self) -> None:
         orchestrator = ConversationOrchestrator(
@@ -811,7 +811,7 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_interrupt_probe_reuses_transcription_for_turn_processing(self) -> None:
         stt_engine = CountingSpeechToTextEngine(
-            text_resolver=lambda segment: "コハク、どうする？" if segment.source == "user" else "ignored"
+            text_resolver=lambda segment: "どうする？" if segment.source == "user" else "ignored"
         )
         orchestrator = ConversationOrchestrator(
             settings=AppSettings(
@@ -847,7 +847,7 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stt_engine.backend_call_count, 1)
         self.assertEqual(stt_engine.transcribe_call_count, 3)
-        self.assertIn("Assistant: コハク、どうする？", output.completed_texts)
+        self.assertIn("Assistant: どうする？", output.completed_texts)
 
     async def test_raw_explicit_interrupt_probe_does_not_block_submit(self) -> None:
         release_event = asyncio.Event()
@@ -1262,6 +1262,46 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_require_explicit_trigger_allows_assistant_name_variants(self) -> None:
+        for utterance in ("こはく さっきの続きなんだけど", "琥珀 さっきの続きなんだけど"):
+            with self.subTest(utterance=utterance):
+                language_model = CapturingLanguageModel()
+                orchestrator = ConversationOrchestrator(
+                    settings=AppSettings(
+                        session_id="test-session",
+                        input=InputSettings(provider=InputProvider.MICROPHONE),
+                        reply=ReplySettings(
+                            debounce_ms=0.0,
+                            require_explicit_trigger=True,
+                        ),
+                        queue=QueueSettings(
+                            ingress_maxsize=4,
+                            overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                        ),
+                    ),
+                    stt_engine=MockSpeechToTextEngine(),
+                    language_model=language_model,
+                    tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+                    audio_output=MemoryAudioOutput(),
+                    metrics=InMemoryMetricsRecorder(),
+                )
+                await orchestrator.start()
+                try:
+                    accepted = await orchestrator.submit_utterance(AudioSegment.from_text(utterance))
+                    self.assertTrue(accepted)
+                    await orchestrator.wait_for_idle()
+                finally:
+                    await orchestrator.stop()
+
+                self.assertEqual(len(language_model.requests), 1)
+                self.assertEqual(
+                    [(message.role, message.content) for message in orchestrator.session.snapshot()],
+                    [
+                        ("user", utterance),
+                        ("assistant", "captured"),
+                    ],
+                )
+
     async def test_suppressed_microphone_turn_can_trigger_proactive_reply(self) -> None:
         language_model = CapturingLanguageModel()
         orchestrator = ConversationOrchestrator(
@@ -1355,6 +1395,55 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             [(message.role, message.content) for message in orchestrator.session.snapshot()],
             [
                 ("user", "なんで？"),
+                ("assistant", "captured"),
+            ],
+        )
+
+    async def test_explicit_microphone_reply_discards_stale_proactive_topic(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(
+                    debounce_ms=0.0,
+                    require_explicit_trigger=True,
+                ),
+                proactive=ProactiveSettings(
+                    enabled=True,
+                    screen_enabled=False,
+                    idle_seconds=0.05,
+                    cooldown_seconds=0.0,
+                    screen_poll_seconds=1.0,
+                ),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            orchestrator._record_proactive_observation()
+            orchestrator._last_user_activity_ms = 0.0
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("どうする？"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+            await asyncio.sleep(0.2)
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+        self.assertEqual(
+            [(message.role, message.content) for message in orchestrator.session.snapshot()],
+            [
+                ("user", "どうする？"),
                 ("assistant", "captured"),
             ],
         )

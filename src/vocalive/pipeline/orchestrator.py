@@ -828,18 +828,20 @@ class ConversationOrchestrator:
             return segment, True, None
         if interrupt_mode is MicrophoneInterruptMode.DISABLED:
             return segment, False, None
-        if self._active_stage not in {"tts", "playback"}:
+        if self._active_stage is None:
             return segment, False, None
         if segment.transcript_hint:
             prepared_segment, should_interrupt = await self._interrupt_probe_manager.probe_segment(
                 segment,
                 session_id=self.session.session_id,
                 turn_id=self._turn_counter + 1,
+                interrupt_on_explicit_request=True,
             )
             return prepared_segment, should_interrupt, None
         return segment, False, self._interrupt_probe_manager.build_request(
             segment,
             reason=reason,
+            interrupt_on_explicit_request=True,
         )
 
     async def _prepare_application_audio_segment_for_queue(
@@ -871,7 +873,7 @@ class ConversationOrchestrator:
 
 def _assistant_names_for_interrupt(settings: AppSettings) -> tuple[str, ...]:
     normalized_names: list[str] = []
-    for candidate in (settings.overlay.character_name, "コハク"):
+    for candidate in (settings.overlay.character_name, "コハク", "こはく", "琥珀"):
         if candidate is None:
             continue
         normalized = candidate.strip()

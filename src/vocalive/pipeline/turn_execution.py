@@ -11,6 +11,7 @@ from vocalive.pipeline.interruption import CancellationToken
 from vocalive.pipeline.playback import PlaybackRunner, normalize_assistant_response
 from vocalive.pipeline.proactive import ProactiveCoordinator, ProactiveTurnRequest
 from vocalive.pipeline.reply_policy import ReplyDecision
+from vocalive.pipeline.reply_policy import looks_like_explicit_request
 from vocalive.pipeline.request_building import (
     build_proactive_request_messages,
     build_request_messages,
@@ -115,6 +116,8 @@ class TurnExecutor:
             current_user_parts = tuple()
         else:
             session.append_user_message(session_message_text)
+            if looks_like_explicit_request(transcription.text):
+                self._proactive.clear_observations()
             reply_decision = self._decide_user_reply(
                 transcription.text,
                 segment,

@@ -530,7 +530,8 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
         description=(
             "Microphone barge-in policy: `always` interrupts active assistant speech on new "
             "user speech, `explicit` waits for a finalized utterance that directly calls the "
-            "assistant, and `disabled` never interrupts early"
+            "assistant or clearly asks a question / makes a request, and `disabled` never "
+            "interrupts early"
         )
     ),
     "VOCALIVE_MIC_SPEECH_THRESHOLD": SettingDocumentation(

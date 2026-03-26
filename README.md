@@ -142,7 +142,7 @@ Microphone tuning notes:
 - if you want the assistant to stay quiet during think-alouds or read-alouds and only answer clear prompts, set `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true`
 - `VOCALIVE_PROACTIVE_ENABLED=true` adds a low-priority proactive monologue lane that can speak after a quiet period when new microphone, application-audio, or screenshot observations are available
 - proactive screenshot observations require the normal screen-capture path to be enabled as well; unchanged screenshots are ignored and the latest changed image is reused only as request-scoped context
-- in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant, and `disabled` turns early microphone barge-in off
+- in microphone mode, `VOCALIVE_MIC_INTERRUPT_MODE=always` keeps the legacy speech-start interruption, `explicit` waits for a finalized utterance that directly addresses the assistant or clearly asks a question / makes a request, and `disabled` turns early microphone barge-in off
 - `VOCALIVE_CONVERSATION_WINDOW_ENABLED=true` gates live audio before STT so only recurring conversation windows are transcribed; after each closed interval, the next user speech starts the next open window, and `VOCALIVE_CONVERSATION_WINDOW_APPLY_TO_APP_AUDIO=true` extends the gating itself to application audio
 - `VOCALIVE_CONVERSATION_WINDOW_RESET_POLICY=clear` keeps the previous behavior of starting fresh on reopen; `resume_summary` uses a neutral Gemini pass to prepare a carry-forward resume note during the closed interval and injects that note into the next window instead
 
@@ -229,7 +229,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered utterance |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
 | `VOCALIVE_MIC_PREFER_EXTERNAL` | `true` | Prefer a connected higher-fidelity external mic when the default input looks built-in; auto-selection avoids Bluetooth hands-free inputs |
-| `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always` interrupts active assistant speech on new user speech, `explicit` waits for a finalized utterance that directly calls the assistant, and `disabled` never interrupts early |
+| `VOCALIVE_MIC_INTERRUPT_MODE` | `always` | Microphone barge-in policy: `always` interrupts active assistant speech on new user speech, `explicit` waits for a finalized utterance that directly calls the assistant or clearly asks a question / makes a request, and `disabled` never interrupts early |
 | `VOCALIVE_CONVERSATION_WINDOW_ENABLED` | `false` | When enabled, live audio is only forwarded to STT during conversation windows that reopen on user speech after each closed interval |
 | `VOCALIVE_CONVERSATION_WINDOW_OPEN_SECONDS` | `20.0` | How long each conversation window stays open after user speech reopens it |
 | `VOCALIVE_CONVERSATION_WINDOW_CLOSED_SECONDS` | `180.0` | How long live audio stays skipped before the next user speech may reopen the window |

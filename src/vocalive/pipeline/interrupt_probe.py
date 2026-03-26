@@ -8,7 +8,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from vocalive.models import AudioSegment, TurnContext
-from vocalive.pipeline.reply_policy import looks_like_explicit_assistant_address
+from vocalive.pipeline.reply_policy import (
+    looks_like_explicit_assistant_address,
+    looks_like_explicit_request,
+)
 from vocalive.stt.base import SpeechToTextEngine
 from vocalive.util.logging import log_event
 
@@ -19,6 +22,7 @@ class ExplicitInterruptProbeRequest:
     session_id: str
     turn_id: int
     reason: str
+    interrupt_on_explicit_request: bool = False
 
 
 class ExplicitInterruptProbeManager:
@@ -56,6 +60,7 @@ class ExplicitInterruptProbeManager:
         *,
         session_id: str,
         turn_id: int,
+        interrupt_on_explicit_request: bool = False,
     ) -> tuple[AudioSegment, bool]:
         transcription_text = (segment.transcript_hint or "").strip()
         if not transcription_text:
@@ -77,9 +82,10 @@ class ExplicitInterruptProbeManager:
                 return segment, False
             segment = _with_transcript_hint(segment, transcription_text)
 
-        should_interrupt = looks_like_explicit_assistant_address(
+        should_interrupt = _should_interrupt_for_text(
             transcription_text,
             assistant_names=self._get_assistant_names(),
+            interrupt_on_explicit_request=interrupt_on_explicit_request,
         )
         return segment, should_interrupt
 
@@ -88,6 +94,7 @@ class ExplicitInterruptProbeManager:
         segment: AudioSegment,
         *,
         reason: str,
+        interrupt_on_explicit_request: bool = False,
     ) -> ExplicitInterruptProbeRequest | None:
         active_context = self._get_active_context()
         if active_context is None:
@@ -97,6 +104,7 @@ class ExplicitInterruptProbeManager:
             session_id=active_context.session_id,
             turn_id=active_context.turn_id,
             reason=reason,
+            interrupt_on_explicit_request=interrupt_on_explicit_request,
         )
 
     def schedule(self, request: ExplicitInterruptProbeRequest) -> None:
@@ -149,18 +157,20 @@ class ExplicitInterruptProbeManager:
         if not transcription_text:
             return
         self._remember_probed_transcript_hint(request.segment, transcription_text)
-        if not looks_like_explicit_assistant_address(
+        if not _should_interrupt_for_text(
             transcription_text,
             assistant_names=self._get_assistant_names(),
+            interrupt_on_explicit_request=request.interrupt_on_explicit_request,
         ):
             return
         active_context = self._get_active_context()
         if active_context is None:
             return
+        active_stage = self._get_active_stage()
         if (
             active_context.session_id != request.session_id
             or active_context.turn_id != request.turn_id
-            or self._get_active_stage() not in {"tts", "playback"}
+            or active_stage is None
         ):
             return
         await self._interrupt_active_turn(request.reason)
@@ -206,3 +216,17 @@ def _with_transcript_hint(segment: AudioSegment, transcript_hint: str) -> AudioS
         source=segment.source,
         source_label=segment.source_label,
     )
+
+
+def _should_interrupt_for_text(
+    transcription_text: str,
+    *,
+    assistant_names: tuple[str, ...],
+    interrupt_on_explicit_request: bool,
+) -> bool:
+    if looks_like_explicit_assistant_address(
+        transcription_text,
+        assistant_names=assistant_names,
+    ):
+        return True
+    return interrupt_on_explicit_request and looks_like_explicit_request(transcription_text)
