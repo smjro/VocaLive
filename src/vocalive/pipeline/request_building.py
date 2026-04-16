@@ -20,6 +20,7 @@ def build_request_messages(
     *,
     settings: AppSettings,
     conversation_language: str | None,
+    transient_system_messages: tuple[str, ...] = (),
     now_utc: datetime | None = None,
 ) -> tuple[ConversationMessage, ...]:
     compacted_messages = list(
@@ -53,12 +54,22 @@ def build_request_messages(
     language_instruction = build_conversation_language_instruction(
         conversation_language
     )
+    insertion_index = 1 if identity_instruction is not None else 0
     if language_instruction is not None:
-        insertion_index = 1 if identity_instruction is not None else 0
         compacted_messages.insert(
             insertion_index,
             ConversationMessage(role="system", content=language_instruction),
         )
+        insertion_index += 1
+    for transient_message in transient_system_messages:
+        normalized_message = transient_message.strip()
+        if not normalized_message:
+            continue
+        compacted_messages.insert(
+            insertion_index,
+            ConversationMessage(role="system", content=normalized_message),
+        )
+        insertion_index += 1
     return tuple(compacted_messages)
 
 
@@ -122,6 +133,17 @@ def build_proactive_system_instruction() -> str:
         "Do not start a full back-and-forth or narrate continuously. "
         "Only react to immediate live context that is already present in the conversation "
         "history or attached turn data."
+    )
+
+
+def build_recent_audible_assistant_instruction(text: str) -> str:
+    normalized_text = " ".join(text.split())
+    return (
+        "Recent audible assistant context:\n"
+        "The assistant had already started saying the following before being interrupted, "
+        "so the user may be responding to it even though it is not yet in durable "
+        "conversation history.\n"
+        f"- Assistant (heard, not yet committed): {normalized_text}"
     )
 
 

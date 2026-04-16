@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from vocalive.audio.output import AudioOutput
 from vocalive.config.settings import (
@@ -38,11 +39,14 @@ from vocalive.pipeline.queues import BoundedAsyncQueue
 from vocalive.pipeline.reply_policy import (
     ReplyDecision,
     decide_reply,
+    looks_like_explicit_assistant_address,
+    looks_like_explicit_request,
 )
 from vocalive.pipeline.resume_summary import (
     ConversationResumeSummarizer,
     build_resume_system_message,
 )
+from vocalive.pipeline.request_building import build_session_message_text
 from vocalive.pipeline.screen_capture_turn import CurrentTurnScreenCaptureCoordinator
 from vocalive.pipeline.session import ConversationSession
 from vocalive.pipeline.submission import (
@@ -54,8 +58,14 @@ from vocalive.screen.base import ScreenCaptureEngine
 from vocalive.stt.base import SpeechToTextEngine
 from vocalive.tts.base import TextToSpeechEngine
 from vocalive.util.logging import get_logger, log_event
-from vocalive.util.metrics import InMemoryMetricsRecorder, MetricsRecorder
+from vocalive.util.metrics import InMemoryMetricsRecorder, MetricsRecorder, timed_stage
 from vocalive.util.time import monotonic_ms
+
+
+@dataclass
+class _PendingAudibleAssistantContext:
+    turn_id: int
+    text: str
 
 
 class ConversationOrchestrator:
@@ -87,7 +97,7 @@ class ConversationOrchestrator:
             maxsize=settings.queue.ingress_maxsize,
             overflow_strategy=settings.queue.overflow_strategy,
         )
-        self._application_context_queue = BoundedAsyncQueue[AudioSegment](
+        self._application_context_queue = BoundedAsyncQueue[tuple[AudioSegment, int]](
             maxsize=settings.queue.ingress_maxsize,
             overflow_strategy=settings.queue.overflow_strategy,
         )
@@ -102,8 +112,12 @@ class ConversationOrchestrator:
         self._resume_summary_lock = asyncio.Lock()
         self._prepared_resume_summary_text: str | None = None
         self._prepared_resume_summary_revision: int | None = None
+        self._session_generation = 0
+        self._application_context_inflight = 0
+        self._pending_audible_assistant_context: _PendingAudibleAssistantContext | None = None
         self._idle_event.set()
         self._worker_task: asyncio.Task[None] | None = None
+        self._application_context_worker_task: asyncio.Task[None] | None = None
         self._proactive_monitor_task: asyncio.Task[None] | None = None
         self._turn_counter = 0
         self._active_context: TurnContext | None = None
@@ -179,6 +193,9 @@ class ConversationOrchestrator:
             prepare_segment=self._interrupt_probe_manager.apply_cached_transcript_hint,
             mark_live_user_activity=self._mark_live_user_activity,
             decide_user_reply=self._decide_user_reply,
+            consume_recent_audible_assistant_context=(
+                self._consume_recent_audible_assistant_context
+            ),
             should_capture_application_audio_as_context=(
                 self._should_capture_application_audio_as_context
             ),
@@ -194,6 +211,11 @@ class ConversationOrchestrator:
             return
         self._proactive.initialize_user_activity()
         self._worker_task = asyncio.create_task(self._run(), name="vocalive-orchestrator")
+        if self._application_context_worker_task is None:
+            self._application_context_worker_task = asyncio.create_task(
+                self._run_application_context_worker(),
+                name="vocalive-application-context",
+            )
         if self.settings.proactive.enabled and self._proactive_monitor_task is None:
             self._proactive_monitor_task = asyncio.create_task(
                 self._run_proactive_monitor(),
@@ -212,6 +234,15 @@ class ConversationOrchestrator:
         await self._interrupt_probe_manager.discard()
         self._discard_pending_proactive_turns()
         await self._interrupt_active_turn(reason="shutdown", force_stop_audio=True)
+        application_context_worker_task = self._application_context_worker_task
+        self._application_context_worker_task = None
+        if (
+            application_context_worker_task is not None
+            and not application_context_worker_task.done()
+        ):
+            application_context_worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await application_context_worker_task
         worker_task = self._worker_task
         self._worker_task = None
         if worker_task is None:
@@ -235,6 +266,7 @@ class ConversationOrchestrator:
         drained_conversation_count = _drain_queue(self._queue)
         drained_application_count = _drain_queue(self._application_context_queue)
         drained_proactive_count = self._discard_pending_proactive_turns()
+        self._session_generation += 1
         self.session = ConversationSession(session_id=self.session.session_id)
         for message in carry_forward_messages:
             if message.role != "system":
@@ -245,6 +277,7 @@ class ConversationOrchestrator:
         self._last_application_audio_submission_ms = None
         self._screen_capture.reset()
         self._clear_prepared_resume_summary()
+        self._clear_pending_audible_assistant_context()
         self._set_idle_if_drained()
         log_event(
             self.logger,
@@ -442,7 +475,9 @@ class ConversationOrchestrator:
         if segment.source != "application_audio":
             raise ValueError("application context submission requires application_audio segments")
         self._idle_event.clear()
-        accepted = await self._application_context_queue.put(segment)
+        accepted = await self._application_context_queue.put(
+            (segment, self._session_generation)
+        )
         if not accepted:
             self._log_queue_overflow(
                 queue_name="application_context",
@@ -450,7 +485,6 @@ class ConversationOrchestrator:
             )
             self._set_idle_if_drained()
             return False
-        self._work_available.set()
         return True
 
     async def handle_user_speech_start(self, source: AudioSource = "user") -> None:
@@ -469,11 +503,7 @@ class ConversationOrchestrator:
     async def _run(self) -> None:
         while True:
             work_item, task_done = await self._await_next_work_item()
-            self._turn_counter += 1
-            context = TurnContext(
-                session_id=self.session.session_id,
-                turn_id=self._turn_counter,
-            )
+            context = self._allocate_turn_context()
             cancellation = self._interruptions.begin_turn()
             self._active_context = context
             self._active_stage = None
@@ -524,6 +554,44 @@ class ConversationOrchestrator:
                 if self._set_idle_if_drained():
                     self._emit_event(ConversationEvent(type="session_idle", session_id=context.session_id))
 
+    async def _run_application_context_worker(self) -> None:
+        while True:
+            queued_item = await self._application_context_queue.get()
+            segment, generation = queued_item
+            context = self._allocate_turn_context()
+            self._application_context_inflight += 1
+            try:
+                await self._process_application_context_segment(
+                    segment=segment,
+                    context=context,
+                    generation=generation,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log_event(
+                    self.logger,
+                    "turn_failed",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    error=str(exc),
+                    audio_source=segment.source,
+                    context_only=True,
+                )
+            finally:
+                self._application_context_inflight = max(
+                    0,
+                    self._application_context_inflight - 1,
+                )
+                self._application_context_queue.task_done()
+                if self._set_idle_if_drained():
+                    self._emit_event(
+                        ConversationEvent(
+                            type="session_idle",
+                            session_id=context.session_id,
+                        )
+                    )
+
     async def _process_turn(
         self,
         segment: AudioSegment,
@@ -548,6 +616,55 @@ class ConversationOrchestrator:
             cancellation=cancellation,
         )
 
+    async def _process_application_context_segment(
+        self,
+        *,
+        segment: AudioSegment,
+        context: TurnContext,
+        generation: int,
+    ) -> None:
+        if segment.source != "application_audio":
+            raise ValueError("application context worker requires application_audio segments")
+        turn_started_ms = monotonic_ms()
+        with timed_stage(self.metrics, "stt", context):
+            transcription = await self.stt_engine.transcribe(segment, context)
+        log_event(
+            self.logger,
+            "transcription_ready",
+            session_id=context.session_id,
+            turn_id=context.turn_id,
+            text=transcription.text,
+            stt_provider=transcription.provider,
+            audio_source=segment.source,
+            audio_source_label=segment.source_label,
+            context_only=True,
+        )
+        self._emit_event(
+            ConversationEvent(
+                type="transcription_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=transcription.text,
+            )
+        )
+        self._mark_live_user_activity()
+        if generation != self._session_generation:
+            self.metrics.record_duration(
+                stage="turn_total",
+                duration_ms=monotonic_ms() - turn_started_ms,
+                context=context,
+            )
+            return
+        self.session.append_application_message(
+            build_session_message_text(segment, transcription.text)
+        )
+        self._proactive.record_application_audio_observation(segment)
+        self.metrics.record_duration(
+            stage="turn_total",
+            duration_ms=monotonic_ms() - turn_started_ms,
+            context=context,
+        )
+
     async def _await_next_work_item(
         self,
     ) -> tuple[AudioSegment | ProactiveTurnRequest, Callable[[], None]]:
@@ -555,9 +672,6 @@ class ConversationOrchestrator:
             segment = self._queue.get_nowait()
             if segment is not None:
                 return segment, self._queue.task_done
-            segment = self._application_context_queue.get_nowait()
-            if segment is not None:
-                return segment, self._application_context_queue.task_done
             proactive_request = self._proactive_queue.get_nowait()
             if proactive_request is not None:
                 self._proactive.mark_request_dequeued(proactive_request)
@@ -569,7 +683,6 @@ class ConversationOrchestrator:
             self._work_available.clear()
             if (
                 not self._queue.empty()
-                or not self._application_context_queue.empty()
                 or not self._proactive_queue.empty()
             ):
                 self._work_available.set()
@@ -647,6 +760,7 @@ class ConversationOrchestrator:
             and not self._application_segment_debouncer.has_pending_segment
             and self._queue.empty()
             and self._application_context_queue.empty()
+            and self._application_context_inflight == 0
             and self._proactive_queue.empty()
             and not self._interruptions.has_active_turn
         ):
@@ -687,6 +801,7 @@ class ConversationOrchestrator:
             and not self._application_segment_debouncer.has_pending_segment
             and self._queue.empty()
             and self._application_context_queue.empty()
+            and self._application_context_inflight == 0
             and self._proactive_queue.empty()
             and not self._interruptions.has_active_turn
         )
@@ -726,11 +841,22 @@ class ConversationOrchestrator:
         self._proactive.last_proactive_response_ms = value
 
     def _should_debounce_live_segment(self, segment: AudioSegment) -> bool:
-        return (
+        if not (
             self.settings.input.provider is InputProvider.MICROPHONE
             and segment.source == "user"
             and self.settings.reply.debounce_ms > 0.0
-        )
+        ):
+            return False
+        transcript_hint = (segment.transcript_hint or "").strip()
+        if transcript_hint and (
+            looks_like_explicit_assistant_address(
+                transcript_hint,
+                assistant_names=_assistant_names_for_interrupt(self.settings),
+            )
+            or looks_like_explicit_request(transcript_hint)
+        ):
+            return False
+        return True
 
     async def _interrupt_active_turn(self, reason: str, force_stop_audio: bool = False) -> None:
         interrupted_now = self._interruptions.interrupt_active_turn()
@@ -767,6 +893,13 @@ class ConversationOrchestrator:
         self._last_assistant_response_ms = value
 
     def _emit_event(self, event: ConversationEvent) -> None:
+        if event.type == "assistant_chunk_started" and event.turn_id is not None:
+            self._record_audible_assistant_chunk(
+                turn_id=event.turn_id,
+                text=event.text,
+            )
+        elif event.type == "assistant_message_committed" and event.turn_id is not None:
+            self._clear_pending_audible_assistant_context(turn_id=event.turn_id)
         try:
             self.event_sink.emit(event)
         except Exception as exc:
@@ -778,6 +911,49 @@ class ConversationOrchestrator:
                 event_type=event.type,
                 error=str(exc),
             )
+
+    def _allocate_turn_context(self) -> TurnContext:
+        self._turn_counter += 1
+        return TurnContext(
+            session_id=self.session.session_id,
+            turn_id=self._turn_counter,
+        )
+
+    def _record_audible_assistant_chunk(self, *, turn_id: int, text: str | None) -> None:
+        normalized_text = " ".join((text or "").split())
+        if not normalized_text:
+            return
+        pending = self._pending_audible_assistant_context
+        if pending is None or pending.turn_id != turn_id:
+            self._pending_audible_assistant_context = _PendingAudibleAssistantContext(
+                turn_id=turn_id,
+                text=normalized_text,
+            )
+            return
+        if normalized_text == pending.text:
+            return
+        if pending.text.endswith(normalized_text):
+            return
+        pending.text = f"{pending.text} {normalized_text}".strip()
+
+    def _clear_pending_audible_assistant_context(
+        self,
+        *,
+        turn_id: int | None = None,
+    ) -> None:
+        pending = self._pending_audible_assistant_context
+        if pending is None:
+            return
+        if turn_id is not None and pending.turn_id != turn_id:
+            return
+        self._pending_audible_assistant_context = None
+
+    def _consume_recent_audible_assistant_context(self) -> str | None:
+        pending = self._pending_audible_assistant_context
+        self._pending_audible_assistant_context = None
+        if pending is None:
+            return None
+        return pending.text
 
     def _decide_user_reply(
         self,

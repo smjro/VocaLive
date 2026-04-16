@@ -138,7 +138,7 @@ Microphone tuning notes:
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive will switch away from a built-in default mic if it finds a higher-fidelity external input; Bluetooth hands-free / AG Audio inputs are skipped by auto-selection because they commonly degrade Windows playback quality
 - if phrase starts are clipped, increase `VOCALIVE_MIC_PRE_SPEECH_MS`
 - if mid-sentence pauses cause early cuts, increase `VOCALIVE_MIC_SPEECH_HOLD_MS` and `VOCALIVE_MIC_SILENCE_MS`
-- after one live utterance is emitted, VocaLive waits briefly before queueing the LLM turn so closely spaced microphone utterances can merge; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
+- after one live utterance is emitted, VocaLive waits only briefly before queueing the LLM turn so closely spaced microphone utterances can still merge without adding a full extra beat of lag; tune this with `VOCALIVE_REPLY_DEBOUNCE_MS`
 - microphone reply suppression is enabled by default for live user speech so short reactions such as `やばい` are more likely to stay silent unless they are clear questions/requests; tune this with the `VOCALIVE_REPLY_*` settings
 - if you want the assistant to stay quiet during think-alouds or read-alouds and only answer clear prompts, set `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true`
 - `VOCALIVE_PROACTIVE_ENABLED=true` adds a low-priority proactive monologue lane that can speak after a quiet period when new microphone, application-audio, or screenshot observations are available
@@ -150,7 +150,7 @@ Microphone tuning notes:
 Application-audio notes:
 
 - application audio can be enabled alongside either `stdin` or `microphone` input
-- `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; app audio is transcribed and appended to session history as labeled application context, but it does not immediately trigger LLM/TTS or interrupt active playback
+- `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; app audio is transcribed and appended to session history as labeled application context on a separate background STT lane, but it does not immediately trigger LLM/TTS or interrupt active playback
 - older application-audio entries are compacted into a separate bounded summary while the newest configured app-context messages stay verbatim in the LLM request window
 - set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application-audio utterances to behave like live turns and trigger immediate assistant replies
 - on macOS, the configured target is matched against the running application name first and bundle identifier second
@@ -168,6 +168,7 @@ Application-audio notes:
 Screen-capture notes:
 
 - screen capture is request-scoped, not persistent session history
+- if assistant playback was interrupted after audio had already started, the heard-but-not-yet-committed assistant text is carried into the next user turn as request-scoped transient context so follow-up replies can still refer to what the user just heard
 - older user/assistant turns are compacted into one system summary when the request window grows past the configured raw-message count
 - explicit capture is triggered when the normalized user utterance contains one of the configured trigger phrases
 - optional passive capture can also watch for configured screen-reference phrases during normal conversation; passive sends are rate-limited and unchanged screenshots are skipped
@@ -226,7 +227,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
 | `VOCALIVE_MIC_PRE_SPEECH_MS` | `200.0` | Audio kept before speech starts so utterance onsets are not clipped |
 | `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200.0` | Keep an utterance in the speech state briefly after the threshold drops |
-| `VOCALIVE_MIC_SILENCE_MS` | `500.0` | Silence required before emitting the buffered utterance |
+| `VOCALIVE_MIC_SILENCE_MS` | `300.0` | Silence required before emitting the buffered utterance |
 | `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered audio before end-of-turn detection may emit |
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered utterance |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
@@ -264,7 +265,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
 | `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
 | `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
-| `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000.0` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
+| `VOCALIVE_REPLY_DEBOUNCE_MS` | `200.0` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
 | `VOCALIVE_REPLY_MIN_GAP_MS` | `6000.0` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
 | `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |

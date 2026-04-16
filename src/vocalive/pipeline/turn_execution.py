@@ -13,6 +13,7 @@ from vocalive.pipeline.proactive import ProactiveCoordinator, ProactiveTurnReque
 from vocalive.pipeline.reply_policy import ReplyDecision
 from vocalive.pipeline.reply_policy import looks_like_explicit_request
 from vocalive.pipeline.request_building import (
+    build_recent_audible_assistant_instruction,
     build_proactive_request_messages,
     build_request_messages,
     build_session_message_text,
@@ -39,6 +40,7 @@ class TurnExecutor:
         prepare_segment: Callable[[AudioSegment], AudioSegment],
         mark_live_user_activity: Callable[[], None],
         decide_user_reply: Callable[[str, AudioSegment], ReplyDecision],
+        consume_recent_audible_assistant_context: Callable[[], str | None],
         should_capture_application_audio_as_context: Callable[[AudioSegment], bool],
         set_last_assistant_response_ms: Callable[[float], None],
         set_active_stage: Callable[[str | None], None],
@@ -56,6 +58,9 @@ class TurnExecutor:
         self._prepare_segment = prepare_segment
         self._mark_live_user_activity = mark_live_user_activity
         self._decide_user_reply = decide_user_reply
+        self._consume_recent_audible_assistant_context = (
+            consume_recent_audible_assistant_context
+        )
         self._should_capture_application_audio_as_context = (
             should_capture_application_audio_as_context
         )
@@ -145,6 +150,17 @@ class TurnExecutor:
                 context=context,
                 cancellation=cancellation,
             )
+        transient_system_messages = tuple()
+        if segment.source != "application_audio":
+            recent_audible_assistant_text = (
+                self._consume_recent_audible_assistant_context()
+            )
+            if recent_audible_assistant_text:
+                transient_system_messages = (
+                    build_recent_audible_assistant_instruction(
+                        recent_audible_assistant_text
+                    ),
+                )
 
         request = ConversationRequest(
             context=context,
@@ -154,6 +170,7 @@ class TurnExecutor:
                 conversation_language=(
                     transcription.language or self._settings.conversation.language
                 ),
+                transient_system_messages=transient_system_messages,
             ),
             current_user_parts=current_user_parts,
         )

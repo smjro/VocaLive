@@ -46,7 +46,7 @@ The current entry point is `src/vocalive/main.py`.
 - `VOCALIVE_INPUT_PROVIDER=microphone` uses `sounddevice` and local utterance detection
 - live microphone or application-audio input currently requires a real STT adapter such as `moonshine` or `openai`
 - `VOCALIVE_APP_AUDIO_ENABLED=true` layers application-audio capture on top of either `stdin` or `microphone`
-- `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; application-audio segments are transcribed and appended to session history without immediately triggering LLM/TTS
+- `VOCALIVE_APP_AUDIO_MODE=context_only` is the default; application-audio segments are transcribed and appended to session history on a separate background STT lane without immediately triggering LLM/TTS
 - set `VOCALIVE_APP_AUDIO_MODE=respond` when you want application audio to behave like a normal live turn and trigger immediate assistant replies
 - application-audio turns are stored in session history as labeled application context, not as user messages
 - application-audio capture currently requires `VOCALIVE_APP_AUDIO_TARGET`; on macOS it also requires Screen Recording permission, and on Windows it requires `csc.exe` plus a Windows build with WASAPI process-loopback support
@@ -69,7 +69,8 @@ The current entry point is `src/vocalive/main.py`.
 - in `respond` mode, the application-audio loop also keeps reading while the assistant is speaking, but playback is interrupted only after a finalized app-audio transcript explicitly addresses the assistant
 - older user/assistant turns are compacted into one bounded summary before Gemini requests once the configured recent raw-message window is exceeded
 - turns older than `VOCALIVE_CONTEXT_ACTIVE_MESSAGE_MAX_AGE_SECONDS` are compacted as reference-only background instead of staying in direct current-turn context
-- microphone user utterances wait for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn
+- microphone user utterances wait only briefly for `VOCALIVE_REPLY_DEBOUNCE_MS` before queueing so closely spaced follow-up speech can merge into one LLM turn without adding a large extra pause
+- if assistant playback was interrupted after audio had already started, the heard-but-not-yet-committed assistant text is carried into the next user turn as transient request context
 - microphone reply suppression is enabled by default for low-value live chatter; explicit questions/requests still bypass the policy
 - `VOCALIVE_REPLY_REQUIRE_EXPLICIT_TRIGGER=true` makes microphone replies opt-in so think-aloud or read-aloud speech stays silent unless it clearly addresses the assistant or asks for something
 - `VOCALIVE_PROACTIVE_ENABLED=true` adds a low-priority proactive monologue lane that can speak after a quiet period when new microphone, application-audio, or screenshot observations are available
@@ -125,7 +126,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_MIC_SPEECH_THRESHOLD` | `0.02` | RMS threshold for treating a block as speech |
 | `VOCALIVE_MIC_PRE_SPEECH_MS` | `200.0` | Audio kept before speech starts so utterance onsets are not clipped |
 | `VOCALIVE_MIC_SPEECH_HOLD_MS` | `200.0` | Keep an utterance in the speech state briefly after the threshold drops |
-| `VOCALIVE_MIC_SILENCE_MS` | `500.0` | Silence required before emitting the buffered utterance |
+| `VOCALIVE_MIC_SILENCE_MS` | `300.0` | Silence required before emitting the buffered utterance |
 | `VOCALIVE_MIC_MIN_UTTERANCE_MS` | `250.0` | Minimum buffered audio before end-of-turn detection may emit |
 | `VOCALIVE_MIC_MAX_UTTERANCE_MS` | `15000.0` | Hard cap for one buffered utterance |
 | `VOCALIVE_MIC_DEVICE` | unset | Optional input device id, device name, `default`, or `external` |
@@ -163,7 +164,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_OVERLAY_AUTO_OPEN` | `true` | Ask the system browser to open the overlay page automatically |
 | `VOCALIVE_OVERLAY_TITLE` | `VocaLive Overlay` | Browser page title for the overlay |
 | `VOCALIVE_OVERLAY_CHARACTER_NAME` | `Tora` | Accessibility label and page text for the overlay character |
-| `VOCALIVE_REPLY_DEBOUNCE_MS` | `1000.0` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
+| `VOCALIVE_REPLY_DEBOUNCE_MS` | `200.0` | Delay before a microphone user utterance is queued for the LLM so nearby follow-up utterances can merge into one turn |
 | `VOCALIVE_REPLY_POLICY_ENABLED` | `true` | Enables conservative microphone reply suppression for low-value live chatter |
 | `VOCALIVE_REPLY_MIN_GAP_MS` | `6000.0` | Minimum time after a completed assistant reply during which short microphone chatter is more likely to be suppressed |
 | `VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS` | `12` | Maximum normalized length treated as a short microphone reaction for suppression heuristics |

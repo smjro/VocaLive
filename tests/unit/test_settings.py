@@ -577,7 +577,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(settings.context.application_recent_message_count, 4)
         self.assertEqual(settings.context.application_summary_max_chars, 900)
         self.assertEqual(settings.context.application_summary_min_message_chars, 8)
-        self.assertEqual(settings.reply.debounce_ms, 1000.0)
+        self.assertEqual(settings.reply.debounce_ms, 200.0)
         self.assertTrue(settings.reply.policy_enabled)
         self.assertEqual(settings.reply.min_gap_ms, 6000.0)
         self.assertEqual(settings.reply.short_utterance_max_chars, 12)

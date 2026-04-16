@@ -46,7 +46,7 @@ application audio PCM
   -> UtteranceAccumulator
   -> AudioSegment(source=application_audio)
   -> if app-audio mode is context_only:
-       low-priority application-context queue
+       background application-context STT lane
        -> STT adapter
        -> append application-context message to session
      else:
@@ -59,6 +59,7 @@ shared pipeline
   -> STT adapter
   -> append user or application-context message to session
   -> optionally suppress low-value microphone chatter before screen capture / LLM / TTS
+  -> if the previous assistant reply was heard but interrupted before commit, inject that heard text as transient request-scoped assistant context for the next user turn
   -> optionally capture the configured window for the current turn when a trigger phrase matches
   -> compact older user/assistant history into one bounded summary while keeping a recent raw-message window
   -> compact older application-audio context into a separate bounded summary while keeping a recent raw app-context window
@@ -119,12 +120,12 @@ The orchestration logic lives in `src/vocalive/pipeline/orchestrator.py`.
 
 ## Queueing and interruption
 
-The pipeline is built around a bounded user-turn queue plus a low-priority application-context queue used by app audio in `context_only` mode.
+The pipeline is built around a bounded user-turn queue plus a separate background application-context STT lane used by app audio in `context_only` mode.
 
 - queue capacity comes from `QueueSettings.ingress_maxsize`
 - overflow policy is explicit: `drop_oldest` or `reject_new`
 - `submit_utterance()` can interrupt the currently active turn before queue insertion, but explicit-mode microphone turns and application-audio turns first check whether the finalized transcript explicitly addresses the assistant while speech is active
-- application audio in `context_only` mode is routed into the low-priority queue and does not interrupt active playback or trigger LLM/TTS
+- application audio in `context_only` mode is transcribed and committed on the background context lane so it can land in session promptly even while assistant playback is still running, but it still does not interrupt active playback or trigger LLM/TTS
 - microphone speech onset calls `handle_user_speech_start()` only when the configured mic interrupt mode still allows immediate barge-in
 - application audio in `respond` mode keeps reading while the assistant is speaking, but it no longer interrupts on speech onset; only a finalized explicit assistant address can cut active playback
 - playback backends receive a `CancellationToken` and must stop quickly when a turn is cancelled
@@ -139,11 +140,11 @@ This prevents unbounded backlog growth and avoids finishing obsolete replies aft
 
 - user messages are appended after STT completes
 - application-audio transcripts are appended after STT completes as labeled `application` context messages, not user messages
-- in the default `context_only` mode, those application messages do not immediately trigger LLM/TTS; they are consumed on the next user-driven turn
+- in the default `context_only` mode, those application messages do not immediately trigger LLM/TTS; they are committed as soon as STT finishes and then consumed on the next user-driven turn
 - the LLM receives a compacted session view: recent user/assistant raw messages that are still within the active-age budget, one bounded earlier-conversation summary with older turns marked reference-only when stale, recent application-audio raw messages that are still within the active-age budget, one bounded earlier application-audio summary, a participant-identity system instruction that can include the configured user name, and an optional conversation-language system instruction
 - screen captures are request-scoped extras for the current user turn only and are not persisted in session history
 - assistant messages are appended only after the full reply has been synthesized and played
-- interrupted assistant replies are therefore not committed to session history
+- interrupted assistant replies are therefore not committed to session history, but any assistant text that was already heard is carried into the next user turn as transient request-scoped context
 
 This commit policy is important. Changes that alter it should be treated as behavior changes and documented.
 

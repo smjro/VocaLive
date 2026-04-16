@@ -437,6 +437,53 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Assistant: first", output.started_texts)
         self.assertIn("Assistant: second", output.completed_texts)
 
+    async def test_interrupted_audible_assistant_context_is_injected_into_next_user_turn(self) -> None:
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        language_model = SequencedCapturingLanguageModel(
+            ("First sentence. Second sentence.", "Follow-up reply.")
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=output,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: output.started_texts == ["First sentence."])
+
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("その話でいいよ")
+            )
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 2)
+        transient_system_messages = [
+            message.content
+            for message in language_model.requests[1].messages
+            if message.role == "system"
+            and "Recent audible assistant context:" in message.content
+        ]
+        self.assertEqual(len(transient_system_messages), 1)
+        self.assertIn("First sentence.", transient_system_messages[0])
+        self.assertEqual(
+            [message.content for message in orchestrator.session.snapshot()],
+            ["first", "その話でいいよ", "Follow-up reply."],
+        )
+
     async def test_user_speech_start_interrupts_existing_turn_before_submit(self) -> None:
         output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
         self.orchestrator.audio_output = output
@@ -1053,6 +1100,36 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
             self.assertEqual(language_model.requests, [])
             await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 1)
+
+    async def test_explicit_microphone_transcript_hint_skips_reply_debounce(self) -> None:
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(provider=InputProvider.MICROPHONE),
+                reply=ReplySettings(debounce_ms=80.0),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text("なんで？")
+            )
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: len(language_model.requests) == 1, timeout_seconds=0.05)
         finally:
             await orchestrator.stop()
 
@@ -2287,8 +2364,69 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             [(message.role, message.content) for message in self.orchestrator.session.snapshot()],
             [
                 ("user", "first"),
-                ("assistant", "Assistant: first"),
                 ("application", "Application audio (Steam): cutscene line"),
+                ("assistant", "Assistant: first"),
+            ],
+        )
+
+    async def test_context_only_application_audio_commits_before_next_queued_user_turn(self) -> None:
+        output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
+        language_model = CapturingLanguageModel()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                input=InputSettings(
+                    provider=InputProvider.MICROPHONE,
+                    interrupt_mode=MicrophoneInterruptMode.DISABLED,
+                ),
+                reply=ReplySettings(debounce_ms=0.0, policy_enabled=False),
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=output,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("first"))
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: output.started_texts == ["captured"])
+
+            accepted = await orchestrator.submit_utterance(
+                AudioSegment.from_text(
+                    "boss incoming",
+                    source="application_audio",
+                    source_label="Steam",
+                )
+            )
+            self.assertTrue(accepted)
+            await self._wait_for(
+                lambda: (
+                    [message.content for message in orchestrator.session.snapshot()]
+                    == ["first", "Application audio (Steam): boss incoming"]
+                )
+            )
+            self.assertEqual(output.completed_texts, [])
+
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("what now"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(len(language_model.requests), 2)
+        self.assertEqual(
+            [(message.role, message.content) for message in language_model.requests[1].messages[2:]],
+            [
+                ("user", "first"),
+                ("application", "Application audio (Steam): boss incoming"),
+                ("assistant", "captured"),
+                ("user", "what now"),
             ],
         )
 

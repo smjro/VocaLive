@@ -218,7 +218,7 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_MIC_SPEECH_THRESHOLD", "input", "float", "0.02"),
     SettingDefinition("VOCALIVE_MIC_PRE_SPEECH_MS", "input", "float", "200.0"),
     SettingDefinition("VOCALIVE_MIC_SPEECH_HOLD_MS", "input", "float", "200.0"),
-    SettingDefinition("VOCALIVE_MIC_SILENCE_MS", "input", "float", "500.0"),
+    SettingDefinition("VOCALIVE_MIC_SILENCE_MS", "input", "float", "300.0"),
     SettingDefinition("VOCALIVE_MIC_MIN_UTTERANCE_MS", "input", "float", "250.0"),
     SettingDefinition("VOCALIVE_MIC_MAX_UTTERANCE_MS", "input", "float", "15000.0"),
     SettingDefinition("VOCALIVE_MIC_DEVICE", "input", "string", None, nullable=True),
@@ -356,7 +356,7 @@ CONTROLLER_SETTING_DEFINITIONS = (
     SettingDefinition("VOCALIVE_OVERLAY_AUTO_OPEN", "overlay", "bool", "true"),
     SettingDefinition("VOCALIVE_OVERLAY_TITLE", "overlay", "string", "VocaLive Overlay"),
     SettingDefinition("VOCALIVE_OVERLAY_CHARACTER_NAME", "overlay", "string", "Tora"),
-    SettingDefinition("VOCALIVE_REPLY_DEBOUNCE_MS", "reply", "float", "1000.0"),
+    SettingDefinition("VOCALIVE_REPLY_DEBOUNCE_MS", "reply", "float", "200.0"),
     SettingDefinition("VOCALIVE_REPLY_POLICY_ENABLED", "reply", "bool", "true"),
     SettingDefinition("VOCALIVE_REPLY_MIN_GAP_MS", "reply", "float", "6000.0"),
     SettingDefinition("VOCALIVE_REPLY_SHORT_UTTERANCE_MAX_CHARS", "reply", "int", "12"),
@@ -976,7 +976,7 @@ class InputSettings:
     speech_threshold: float = 0.02
     pre_speech_ms: float = 200.0
     speech_hold_ms: float = 200.0
-    silence_threshold_ms: float = 500.0
+    silence_threshold_ms: float = 300.0
     min_utterance_ms: float = 250.0
     max_utterance_ms: float = 15_000.0
     device: str | int | None = None
@@ -1034,7 +1034,7 @@ class OverlaySettings:
 
 @dataclass
 class ReplySettings:
-    debounce_ms: float = 1000.0
+    debounce_ms: float = 200.0
     policy_enabled: bool = True
     min_gap_ms: float = 6000.0
     short_utterance_max_chars: int = 12
@@ -1299,7 +1299,7 @@ class AppSettings:
                 silence_threshold_ms=_read_float(
                     mapping,
                     "VOCALIVE_MIC_SILENCE_MS",
-                    default=500.0,
+                    default=300.0,
                 ),
                 min_utterance_ms=_read_float(
                     mapping,
@@ -1485,7 +1485,7 @@ class AppSettings:
                 debounce_ms=_read_float(
                     mapping,
                     "VOCALIVE_REPLY_DEBOUNCE_MS",
-                    default=1000.0,
+                    default=200.0,
                 ),
                 policy_enabled=_read_bool(
                     mapping,
