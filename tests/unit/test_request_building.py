@@ -15,9 +15,11 @@ from vocalive.models import AudioSegment, ConversationInlineDataPart, Conversati
 from vocalive.pipeline.request_building import (
     build_proactive_current_user_parts,
     build_proactive_request_messages,
+    build_recent_audible_assistant_instruction,
     build_request_messages,
     build_session_message_text,
     classify_screen_capture_request,
+    inject_recent_audible_assistant_message,
 )
 
 
@@ -79,6 +81,36 @@ class RequestBuildingTests(unittest.TestCase):
         )
 
         self.assertEqual(message, "Application audio (Steam): boss fight")
+
+    def test_build_recent_audible_assistant_instruction_marks_context_as_already_heard(
+        self,
+    ) -> None:
+        instruction = build_recent_audible_assistant_instruction()
+
+        self.assertIn("already heard before an interruption", instruction)
+        self.assertIn("Do not restart, restate, or continue it", instruction)
+
+    def test_inject_recent_audible_assistant_message_places_it_before_latest_user(self) -> None:
+        messages = (
+            ConversationMessage(role="system", content="system"),
+            ConversationMessage(role="user", content="first"),
+            ConversationMessage(role="user", content="follow-up"),
+        )
+
+        injected = inject_recent_audible_assistant_message(
+            messages,
+            "First sentence.\n",
+        )
+
+        self.assertEqual(
+            [(message.role, message.content) for message in injected],
+            [
+                ("system", "system"),
+                ("user", "first"),
+                ("assistant", "First sentence."),
+                ("user", "follow-up"),
+            ],
+        )
 
     def test_build_request_messages_moves_stale_turns_to_reference_only_summary(self) -> None:
         now_utc = datetime(2026, 3, 26, 15, 0, tzinfo=timezone.utc)
@@ -155,6 +187,75 @@ class RequestBuildingTests(unittest.TestCase):
             [(message.role, message.content) for message in messages[3:]],
             [("user", "Second question")],
         )
+
+    def test_build_request_messages_reframes_same_turn_utterances_into_recent_context(
+        self,
+    ) -> None:
+        messages = build_request_messages(
+            (
+                ConversationMessage(role="user", content="first fragment"),
+                ConversationMessage(role="user", content="second fragment"),
+                ConversationMessage(role="user", content="final question"),
+            ),
+            settings=AppSettings(),
+            conversation_language="en",
+        )
+
+        self.assertEqual(messages[2].role, "system")
+        self.assertIn("reply_target", messages[2].content)
+        self.assertEqual(messages[3].role, "system")
+        self.assertIn("recent_context:", messages[3].content)
+        self.assertIn("- User: first fragment", messages[3].content)
+        self.assertIn("- User: second fragment", messages[3].content)
+        self.assertEqual(
+            [(message.role, message.content) for message in messages[4:]],
+            [("user", "reply_target: final question")],
+        )
+
+    def test_build_request_messages_only_reframes_utterances_after_last_assistant(
+        self,
+    ) -> None:
+        messages = build_request_messages(
+            (
+                ConversationMessage(role="user", content="already answered"),
+                ConversationMessage(role="assistant", content="previous reply"),
+                ConversationMessage(role="user", content="context fragment"),
+                ConversationMessage(role="user", content="target fragment"),
+            ),
+            settings=AppSettings(),
+            conversation_language="en",
+        )
+
+        self.assertEqual(
+            [(message.role, message.content) for message in messages[2:4]],
+            [("user", "already answered"), ("assistant", "previous reply")],
+        )
+        self.assertEqual(messages[4].role, "system")
+        self.assertIn("reply_target", messages[4].content)
+        self.assertEqual(messages[5].role, "system")
+        self.assertIn("- User: context fragment", messages[5].content)
+        self.assertEqual(messages[6].role, "user")
+        self.assertEqual(messages[6].content, "reply_target: target fragment")
+
+    def test_build_request_messages_omits_older_same_turn_utterances_before_recent_context(
+        self,
+    ) -> None:
+        messages = build_request_messages(
+            (
+                ConversationMessage(role="user", content="one"),
+                ConversationMessage(role="user", content="two"),
+                ConversationMessage(role="application", content="Application audio (Steam): three"),
+                ConversationMessage(role="user", content="four"),
+            ),
+            settings=AppSettings(),
+            conversation_language="en",
+        )
+
+        self.assertEqual(messages[3].role, "system")
+        self.assertIn("recent_context:", messages[3].content)
+        self.assertIn("1 older utterance(s)", messages[3].content)
+        self.assertIn("- Application audio (Steam): three", messages[3].content)
+        self.assertEqual(messages[4].content, "reply_target: four")
 
     def test_build_request_messages_marks_stale_application_audio_as_reference_only(
         self,

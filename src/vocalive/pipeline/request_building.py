@@ -45,6 +45,7 @@ def build_request_messages(
             now_utc=now_utc,
         )
     )
+    compacted_messages = _focus_latest_reply_target(compacted_messages)
     identity_instruction = build_participant_identity_instruction(settings)
     if identity_instruction is not None:
         compacted_messages.insert(
@@ -136,14 +137,122 @@ def build_proactive_system_instruction() -> str:
     )
 
 
-def build_recent_audible_assistant_instruction(text: str) -> str:
-    normalized_text = " ".join(text.split())
+def build_reply_target_focus_instruction() -> str:
     return (
-        "Recent audible assistant context:\n"
-        "The assistant had already started saying the following before being interrupted, "
-        "so the user may be responding to it even though it is not yet in durable "
-        "conversation history.\n"
-        f"- Assistant (heard, not yet committed): {normalized_text}"
+        "This turn has one reply_target. "
+        "The latest utterance below is the only reply_target for this turn. "
+        "Any recent_context provided in system messages is interpretation-only background. "
+        "Reply only to reply_target. Do not directly answer, continue, or summarize "
+        "recent_context unless that is necessary to resolve reply_target."
+    )
+
+
+def build_recent_audible_assistant_instruction() -> str:
+    return (
+        "If this request includes a transient assistant message immediately before the latest "
+        "user turn, that message was already heard before an interruption. Treat it as already "
+        "said context. Do not restart, restate, or continue it unless the user explicitly asks "
+        "you to repeat or continue it."
+    )
+
+
+def inject_recent_audible_assistant_message(
+    messages: tuple[ConversationMessage, ...],
+    text: str,
+) -> tuple[ConversationMessage, ...]:
+    normalized_text = " ".join(text.split())
+    if not normalized_text:
+        return messages
+    transient_message = ConversationMessage(role="assistant", content=normalized_text)
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "user":
+            return messages[:index] + (transient_message,) + messages[index:]
+    return messages + (transient_message,)
+
+
+def _focus_latest_reply_target(
+    messages: list[ConversationMessage],
+) -> list[ConversationMessage]:
+    last_assistant_index = -1
+    for index, message in enumerate(messages):
+        if message.role == "assistant":
+            last_assistant_index = index
+
+    utterance_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if index > last_assistant_index and message.role in {"user", "application"}
+    ]
+    if len(utterance_indexes) <= 1:
+        return messages
+
+    target_index = utterance_indexes[-1]
+    recent_context_indexes = utterance_indexes[-3:-1]
+    omitted_utterance_count = max(
+        0,
+        len(utterance_indexes) - 1 - len(recent_context_indexes),
+    )
+    skipped_indexes = set(utterance_indexes[:-1])
+    focused_messages: list[ConversationMessage] = []
+
+    for index, message in enumerate(messages):
+        if index in skipped_indexes:
+            continue
+        if index == target_index:
+            focused_messages.append(
+                ConversationMessage(
+                    role="system",
+                    content=build_reply_target_focus_instruction(),
+                )
+            )
+            focused_messages.append(
+                ConversationMessage(
+                    role="system",
+                    content=_build_recent_context_message(
+                        recent_context_messages=tuple(
+                            messages[recent_index]
+                            for recent_index in recent_context_indexes
+                        ),
+                        omitted_utterance_count=omitted_utterance_count,
+                    ),
+                )
+            )
+            focused_messages.append(_build_reply_target_message(message))
+            continue
+        focused_messages.append(message)
+    return focused_messages
+
+
+def _build_recent_context_message(
+    *,
+    recent_context_messages: tuple[ConversationMessage, ...],
+    omitted_utterance_count: int,
+) -> str:
+    lines = ["recent_context:"]
+    if omitted_utterance_count > 0:
+        lines.append(
+            f"- {omitted_utterance_count} older utterance(s) from this same unresolved turn were omitted."
+        )
+    for message in recent_context_messages:
+        lines.append(_format_recent_context_line(message))
+    return "\n".join(lines)
+
+
+def _format_recent_context_line(message: ConversationMessage) -> str:
+    normalized_content = " ".join(message.content.split())
+    if message.role == "application":
+        return f"- {normalized_content}"
+    if message.role == "user":
+        return f"- User: {normalized_content}"
+    return f"- {message.role.title()}: {normalized_content}"
+
+
+def _build_reply_target_message(message: ConversationMessage) -> ConversationMessage:
+    normalized_content = " ".join(message.content.split())
+    return ConversationMessage(
+        role=message.role,
+        content=f"reply_target: {normalized_content}",
+        created_at=message.created_at,
     )
 
 

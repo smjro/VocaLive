@@ -30,6 +30,8 @@ class EchoLanguageModel(LanguageModel):
             for message in reversed(request.messages)
             if message.role in {"user", "application"}
         )
+        if latest_user_message.startswith("reply_target: "):
+            latest_user_message = latest_user_message[len("reply_target: ") :]
         return AssistantResponse(
             text=f"{self.prefix}: {latest_user_message}",
             provider=self.name,

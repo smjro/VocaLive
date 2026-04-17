@@ -89,3 +89,74 @@ class OverlayRenderingTests(unittest.TestCase):
         self.assertEqual(snapshot["user_text"], "hello")
         self.assertEqual(snapshot["assistant_text"], "partial answer")
         self.assertEqual(snapshot["status"], "idle")
+
+    def test_emit_ignores_other_turn_updates_while_current_turn_is_speaking(self) -> None:
+        overlay = OverlayServer(
+            OverlaySettings(
+                enabled=True,
+                auto_open=False,
+            )
+        )
+
+        overlay.emit(
+            ConversationEvent(
+                type="assistant_chunk_started",
+                session_id="session-1",
+                turn_id=1,
+                text="speaking now",
+                duration_ms=600.0,
+            )
+        )
+        overlay.emit(
+            ConversationEvent(
+                type="transcription_ready",
+                session_id="session-1",
+                turn_id=2,
+                text="background input",
+            )
+        )
+        overlay.emit(
+            ConversationEvent(
+                type="response_ready",
+                session_id="session-1",
+                turn_id=2,
+                text="background reply",
+            )
+        )
+
+        snapshot = overlay._snapshot_payload()
+        self.assertEqual(snapshot["turn_id"], 1)
+        self.assertEqual(snapshot["assistant_text"], "speaking now")
+        self.assertEqual(snapshot["status"], "speaking")
+
+    def test_new_speaking_turn_replaces_previous_caption_text(self) -> None:
+        overlay = OverlayServer(
+            OverlaySettings(
+                enabled=True,
+                auto_open=False,
+            )
+        )
+
+        overlay.emit(
+            ConversationEvent(
+                type="assistant_chunk_started",
+                session_id="session-1",
+                turn_id=1,
+                text="first turn",
+                duration_ms=600.0,
+            )
+        )
+        overlay.emit(
+            ConversationEvent(
+                type="assistant_chunk_started",
+                session_id="session-1",
+                turn_id=2,
+                text="second turn",
+                duration_ms=600.0,
+            )
+        )
+
+        snapshot = overlay._snapshot_payload()
+        self.assertEqual(snapshot["turn_id"], 2)
+        self.assertEqual(snapshot["assistant_text"], "second turn")
+        self.assertEqual(snapshot["status"], "speaking")

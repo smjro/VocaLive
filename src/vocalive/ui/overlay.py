@@ -524,6 +524,7 @@ class OverlayServer(ConversationEventSink):
             "assistant_text": "",
             "status": "idle",
         }
+        self._active_assistant_turn_id: int | None = None
 
     @property
     def url(self) -> str:
@@ -569,7 +570,8 @@ class OverlayServer(ConversationEventSink):
 
     def emit(self, event: ConversationEvent) -> None:
         payload = asdict(event)
-        self._apply_to_snapshot(payload)
+        if not self._apply_to_snapshot(payload):
+            return
         message = _format_sse(payload)
         with self._subscriber_lock:
             subscribers = tuple(self._subscribers)
@@ -652,33 +654,62 @@ class OverlayServer(ConversationEventSink):
         with self._snapshot_lock:
             return dict(self._snapshot)
 
-    def _apply_to_snapshot(self, payload: dict[str, object]) -> None:
+    def _apply_to_snapshot(self, payload: dict[str, object]) -> bool:
         with self._snapshot_lock:
+            if payload.get("turn_id") is not None:
+                event_turn_id = int(payload["turn_id"])
+            else:
+                event_turn_id = None
+            event_type = payload.get("type")
+            active_turn_id = self._active_assistant_turn_id
+            if (
+                active_turn_id is not None
+                and event_turn_id is not None
+                and event_turn_id != active_turn_id
+                and event_type in {
+                    "transcription_ready",
+                    "response_ready",
+                    "assistant_message_committed",
+                    "turn_interrupted",
+                    "turn_cancelled",
+                }
+            ):
+                return False
             if payload.get("session_id") is not None:
                 self._snapshot["session_id"] = payload["session_id"]
-            if payload.get("turn_id") is not None:
-                self._snapshot["turn_id"] = payload["turn_id"]
-            event_type = payload.get("type")
             if event_type == "transcription_ready":
+                self._snapshot["turn_id"] = event_turn_id
                 self._snapshot["user_text"] = payload.get("text") or ""
                 self._snapshot["assistant_text"] = ""
                 self._snapshot["status"] = "thinking"
+                self._active_assistant_turn_id = None
             elif event_type == "response_ready":
+                self._snapshot["turn_id"] = event_turn_id
                 self._snapshot["assistant_text"] = ""
                 self._snapshot["status"] = "thinking"
+                self._active_assistant_turn_id = None
             elif event_type == "assistant_chunk_started":
                 chunk_text = payload.get("text") or ""
-                self._snapshot["assistant_text"] = (
-                    str(self._snapshot.get("assistant_text") or "") + str(chunk_text)
-                )
+                base_text = ""
+                if active_turn_id == event_turn_id:
+                    base_text = str(self._snapshot.get("assistant_text") or "")
+                self._snapshot["turn_id"] = event_turn_id
+                self._snapshot["assistant_text"] = f"{base_text}{chunk_text}"
                 self._snapshot["status"] = "speaking"
+                self._active_assistant_turn_id = event_turn_id
             elif event_type in {"turn_interrupted", "turn_cancelled"}:
+                self._snapshot["turn_id"] = event_turn_id
+                self._snapshot["assistant_text"] = ""
                 self._snapshot["status"] = "interrupted"
+                self._active_assistant_turn_id = None
             elif event_type == "assistant_message_committed":
+                self._snapshot["turn_id"] = event_turn_id
                 self._snapshot["assistant_text"] = payload.get("text") or ""
                 self._snapshot["status"] = "idle"
+                self._active_assistant_turn_id = None
             elif event_type == "session_idle":
                 self._snapshot["status"] = "idle"
+            return True
 
     def _open_browser(self) -> None:
         with contextlib.suppress(Exception):

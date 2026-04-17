@@ -17,6 +17,7 @@ from vocalive.pipeline.request_building import (
     build_proactive_request_messages,
     build_request_messages,
     build_session_message_text,
+    inject_recent_audible_assistant_message,
 )
 from vocalive.pipeline.screen_capture_turn import CurrentTurnScreenCaptureCoordinator
 from vocalive.pipeline.session import ConversationSession
@@ -151,27 +152,39 @@ class TurnExecutor:
                 cancellation=cancellation,
             )
         transient_system_messages = tuple()
+        request_messages = None
         if segment.source != "application_audio":
             recent_audible_assistant_text = (
                 self._consume_recent_audible_assistant_context()
             )
             if recent_audible_assistant_text:
                 transient_system_messages = (
-                    build_recent_audible_assistant_instruction(
-                        recent_audible_assistant_text
-                    ),
+                    build_recent_audible_assistant_instruction(),
                 )
-
-        request = ConversationRequest(
-            context=context,
-            messages=build_request_messages(
+                request_messages = inject_recent_audible_assistant_message(
+                    build_request_messages(
+                        self._get_session().snapshot(),
+                        settings=self._settings,
+                        conversation_language=(
+                            transcription.language or self._settings.conversation.language
+                        ),
+                        transient_system_messages=transient_system_messages,
+                    ),
+                    recent_audible_assistant_text,
+                )
+        if request_messages is None:
+            request_messages = build_request_messages(
                 self._get_session().snapshot(),
                 settings=self._settings,
                 conversation_language=(
                     transcription.language or self._settings.conversation.language
                 ),
                 transient_system_messages=transient_system_messages,
-            ),
+            )
+
+        request = ConversationRequest(
+            context=context,
+            messages=request_messages,
             current_user_parts=current_user_parts,
         )
         self._set_active_stage("llm")

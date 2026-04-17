@@ -126,7 +126,7 @@ Current runtime constraints:
 - the overlay is local-only and driven by sentence playback events; it is not token streaming from the LLM
 - Gemini accepts either `VOCALIVE_GEMINI_API_KEY` or `GEMINI_API_KEY`
 - OpenAI STT accepts either `VOCALIVE_OPENAI_API_KEY` or `OPENAI_API_KEY`
-- Gemini defaults to a surreal, deadpan conversation persona inspired by the vibe of Kamiusagi Rope; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
+- Gemini defaults to a sharp, chaotic AI-streamer conversation persona for Kohaku; set `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` to override it, or set it to an empty string to disable it
 
 Windows supports the full `stdin` / `microphone` / `application audio` / `screen capture` / overlay / speaker path. On Windows, application audio uses WASAPI process loopback scoped to the selected process tree while the selected process remains alive.
 
@@ -168,7 +168,7 @@ Application-audio notes:
 Screen-capture notes:
 
 - screen capture is request-scoped, not persistent session history
-- if assistant playback was interrupted after audio had already started, the heard-but-not-yet-committed assistant text is carried into the next user turn as request-scoped transient context so follow-up replies can still refer to what the user just heard
+- if assistant playback was interrupted after audio had already started, the heard assistant text is injected into the next user turn as transient assistant history so follow-up replies can refer to it without restarting the same line
 - older user/assistant turns are compacted into one system summary when the request window grows past the configured raw-message count
 - explicit capture is triggered when the normalized user utterance contains one of the configured trigger phrases
 - optional passive capture can also watch for configured screen-reference phrases during normal conversation; passive sends are rate-limited and unchanged screenshots are skipped
@@ -282,7 +282,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_GEMINI_TIMEOUT_SECONDS` | `30.0` | Gemini HTTP timeout |
 | `VOCALIVE_GEMINI_TEMPERATURE` | unset | Optional Gemini generation temperature |
 | `VOCALIVE_GEMINI_THINKING_BUDGET` | `0` | Gemini 2.5 thinking budget; empty unsets it |
-| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku surreal deadpan persona prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
+| `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku sharp AI-streamer prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |

@@ -437,7 +437,9 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Assistant: first", output.started_texts)
         self.assertIn("Assistant: second", output.completed_texts)
 
-    async def test_interrupted_audible_assistant_context_is_injected_into_next_user_turn(self) -> None:
+    async def test_interrupted_audible_assistant_context_becomes_transient_assistant_history(
+        self,
+    ) -> None:
         output = MemoryAudioOutput(chunk_delay_seconds=0.02, chunk_size_bytes=1)
         language_model = SequencedCapturingLanguageModel(
             ("First sentence. Second sentence.", "Follow-up reply.")
@@ -471,14 +473,23 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             await orchestrator.stop()
 
         self.assertEqual(len(language_model.requests), 2)
-        transient_system_messages = [
+        request_messages = language_model.requests[1].messages
+        recent_instruction_messages = [
             message.content
-            for message in language_model.requests[1].messages
+            for message in request_messages
             if message.role == "system"
-            and "Recent audible assistant context:" in message.content
+            and "already heard before an interruption" in message.content
         ]
-        self.assertEqual(len(transient_system_messages), 1)
-        self.assertIn("First sentence.", transient_system_messages[0])
+        self.assertEqual(len(recent_instruction_messages), 1)
+        assistant_messages = [
+            message.content for message in request_messages if message.role == "assistant"
+        ]
+        self.assertEqual(assistant_messages, ["First sentence."])
+        latest_user_index = max(
+            index for index, message in enumerate(request_messages) if message.role == "user"
+        )
+        self.assertEqual(request_messages[latest_user_index - 1].role, "assistant")
+        self.assertEqual(request_messages[latest_user_index - 1].content, "First sentence.")
         self.assertEqual(
             [message.content for message in orchestrator.session.snapshot()],
             ["first", "その話でいいよ", "Follow-up reply."],
@@ -2332,6 +2343,14 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_messages[2].role, "system")
         self.assertIn("Earlier application audio summary:", request_messages[2].content)
         self.assertIn("boss incoming", request_messages[2].content)
+        self.assertEqual(request_messages[3].role, "system")
+        self.assertIn("reply_target", request_messages[3].content)
+        self.assertEqual(request_messages[4].role, "system")
+        self.assertIn("recent_context:", request_messages[4].content)
+        self.assertIn("Application audio (Steam): door opened", request_messages[4].content)
+        self.assertEqual(request_messages[5].role, "user")
+        self.assertTrue(request_messages[5].content.startswith("reply_target: "))
+        return
         self.assertEqual(
             [(message.role, message.content) for message in request_messages[3:]],
             [

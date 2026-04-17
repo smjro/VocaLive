@@ -211,6 +211,8 @@ class AppSettingsTests(unittest.TestCase):
         )
         assert settings.gemini.system_instruction is not None
         self.assertIn("your name is コハク", settings.gemini.system_instruction.lower())
+        self.assertIn("Do not use emoji", settings.gemini.system_instruction)
+        self.assertIn("Stay on one main topic per reply", settings.gemini.system_instruction)
         self.assertIn("Do not start replies by addressing the user by name", settings.gemini.system_instruction)
         self.assertNotIn("ましま", settings.gemini.system_instruction)
         self.assertEqual(settings.conversation.language, "ja")
