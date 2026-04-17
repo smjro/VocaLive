@@ -422,6 +422,12 @@ CONTROLLER_SETTING_DEFINITIONS = (
         nullable=True,
     ),
     SettingDefinition(
+        "VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED",
+        "screen_capture",
+        "bool",
+        "false",
+    ),
+    SettingDefinition(
         "VOCALIVE_SCREEN_TRIGGER_PHRASES",
         "screen_capture",
         "tuple",
@@ -818,6 +824,12 @@ _CONTROLLER_SETTING_DOCUMENTATION = {
     "VOCALIVE_SCREEN_WINDOW_NAME": SettingDocumentation(
         description="Required window selector; matches on-screen window title first, then owner name"
     ),
+    "VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED": SettingDocumentation(
+        description=(
+            "Attaches a screenshot of the configured window to every multimodal Gemini "
+            "turn without waiting for trigger phrases"
+        )
+    ),
     "VOCALIVE_SCREEN_TRIGGER_PHRASES": SettingDocumentation(
         description="Comma-separated trigger phrases that cause a screenshot to be attached"
     ),
@@ -1069,6 +1081,7 @@ class GeminiSettings:
 class ScreenCaptureSettings:
     enabled: bool = False
     window_name: str | None = None
+    always_attach: bool = False
     trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_TRIGGER_PHRASES
     passive_enabled: bool = False
     passive_trigger_phrases: tuple[str, ...] = DEFAULT_SCREEN_PASSIVE_TRIGGER_PHRASES
@@ -1596,6 +1609,11 @@ class AppSettings:
                     mapping,
                     "VOCALIVE_SCREEN_WINDOW_NAME",
                     default=None,
+                ),
+                always_attach=_read_bool(
+                    mapping,
+                    "VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED",
+                    default=False,
                 ),
                 trigger_phrases=_read_str_tuple(
                     mapping,

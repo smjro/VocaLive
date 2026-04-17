@@ -1873,6 +1873,52 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screen_capture_engine.calls, [])
         self.assertEqual(language_model.requests[0].current_user_parts, ())
 
+    async def test_always_attach_adds_screen_capture_parts_without_trigger_phrase(self) -> None:
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = StubScreenCaptureEngine()
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="YouTube",
+                    always_attach=True,
+                ),
+            ),
+            stt_engine=MockSpeechToTextEngine(),
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(AudioSegment.from_text("縺薙ｓ縺ｫ縺｡縺ｯ"))
+            self.assertTrue(accepted)
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [1])
+        self.assertEqual(
+            language_model.requests[0].current_user_parts,
+            (
+                ConversationTextPart(
+                    text=(
+                        "Configured target window: YouTube. "
+                        "The attached image is a screenshot of that window for this turn because "
+                        "always-attach screen capture is enabled."
+                    )
+                ),
+                ConversationInlineDataPart(mime_type="image/png", data=b"png-bytes"),
+            ),
+        )
+
     async def test_passive_trigger_phrase_adds_screen_capture_parts(self) -> None:
         language_model = MultimodalCapturingLanguageModel()
         screen_capture_engine = StubScreenCaptureEngine()

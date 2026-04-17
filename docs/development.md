@@ -80,7 +80,7 @@ The current entry point is `src/vocalive/main.py`.
 - when `VOCALIVE_MIC_DEVICE` is unset and `VOCALIVE_MIC_PREFER_EXTERNAL=true`, VocaLive prefers a connected higher-fidelity external mic over a built-in default input and skips Bluetooth hands-free / AG Audio inputs during auto-selection
 - the microphone path uses local RMS thresholding plus silence timing, not a production VAD
 - the stdin shell sets `AudioSegment.transcript_hint`, so real STT configs such as `moonshine` and `openai` can still exercise Gemini and Aivis wiring before switching to live microphone capture
-- when screen capture is enabled, explicit trigger phrases attach one screenshot of the configured window to the current Gemini turn only; optional passive screen-reference phrases can also attach one, but passive sends are rate-limited and unchanged screenshots are skipped
+- when screen capture is enabled, explicit trigger phrases attach one screenshot of the configured window to the current Gemini turn only; optional always-attach mode can include one on every eligible Gemini turn, and optional passive screen-reference phrases can also attach one, but passive sends are rate-limited and unchanged screenshots are skipped
 
 Speaker playback uses `afplay {path}` by default on macOS and PowerShell `SoundPlayer` on Windows. On other platforms, set `VOCALIVE_SPEAKER_COMMAND` to a command template that includes `{path}`.
 
@@ -184,6 +184,7 @@ Runtime settings are parsed through `AppSettings.from_mapping()` in `src/vocaliv
 | `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku sharp AI-streamer prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
+| `VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED` | `false` | Attaches a screenshot of the configured window to every multimodal Gemini turn without waiting for trigger phrases |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |
 | `VOCALIVE_SCREEN_PASSIVE_ENABLED` | `false` | Allows screen-reference phrases to attach a screenshot opportunistically during normal conversation |
 | `VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES` | `この画面,今の画面,いまの画面,見えてる,見えてます` | Comma-separated screen-reference phrases checked only when passive capture is enabled |

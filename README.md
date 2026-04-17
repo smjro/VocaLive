@@ -171,6 +171,7 @@ Screen-capture notes:
 - if assistant playback was interrupted after audio had already started, the heard assistant text is injected into the next user turn as transient assistant history so follow-up replies can refer to it without restarting the same line
 - older user/assistant turns are compacted into one system summary when the request window grows past the configured raw-message count
 - explicit capture is triggered when the normalized user utterance contains one of the configured trigger phrases
+- optional always-attach mode can also include one screenshot of the configured window on every eligible Gemini turn without waiting for a trigger phrase
 - optional passive capture can also watch for configured screen-reference phrases during normal conversation; passive sends are rate-limited and unchanged screenshots are skipped
 - the current implementation resolves the first on-screen window whose title or owner name matches `VOCALIVE_SCREEN_WINDOW_NAME` on macOS and Windows
 - captured screenshots are downscaled so the longest edge is at most `1280px` before they are attached to Gemini; set `VOCALIVE_SCREEN_RESIZE_MAX_EDGE_PX` empty to disable that
@@ -285,6 +286,7 @@ The controller UI exposes the same per-setting descriptions through each field's
 | `VOCALIVE_GEMINI_SYSTEM_INSTRUCTION` | Kohaku sharp AI-streamer prompt | Overrides the default Gemini character prompt; set empty to disable it entirely |
 | `VOCALIVE_SCREEN_CAPTURE_ENABLED` | `false` | Enables request-scoped named-window screenshot capture for Gemini turns |
 | `VOCALIVE_SCREEN_WINDOW_NAME` | unset | Required window selector; matches on-screen window title first, then owner name |
+| `VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED` | `false` | Attaches a screenshot of the configured window to every multimodal Gemini turn without waiting for trigger phrases |
 | `VOCALIVE_SCREEN_TRIGGER_PHRASES` | `画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て` | Comma-separated trigger phrases that cause a screenshot to be attached |
 | `VOCALIVE_SCREEN_PASSIVE_ENABLED` | `false` | Allows screen-reference phrases to attach a screenshot opportunistically during normal conversation |
 | `VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES` | `この画面,今の画面,いまの画面,見えてる,見えてます` | Comma-separated screen-reference phrases checked only when passive capture is enabled |

@@ -56,6 +56,7 @@ class CurrentTurnScreenCaptureCoordinator:
         capture_mode = classify_screen_capture_request(
             user_text,
             trigger_phrases=self.settings.trigger_phrases,
+            always_attach=self.settings.always_attach,
             passive_enabled=self.settings.passive_enabled,
             passive_trigger_phrases=self.settings.passive_trigger_phrases,
         )

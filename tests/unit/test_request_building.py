@@ -302,11 +302,23 @@ class RequestBuildingTests(unittest.TestCase):
         capture_mode = classify_screen_capture_request(
             "please show this screen",
             trigger_phrases=("show this",),
+            always_attach=True,
             passive_enabled=True,
             passive_trigger_phrases=("this screen",),
         )
 
         self.assertEqual(capture_mode, "explicit")
+
+    def test_classify_screen_capture_request_returns_always_mode_without_trigger(self) -> None:
+        capture_mode = classify_screen_capture_request(
+            "hello there",
+            trigger_phrases=("show this",),
+            always_attach=True,
+            passive_enabled=True,
+            passive_trigger_phrases=("this screen",),
+        )
+
+        self.assertEqual(capture_mode, "always")
 
 
 if __name__ == "__main__":

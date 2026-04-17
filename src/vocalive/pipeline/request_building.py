@@ -290,9 +290,20 @@ def build_session_message_text(segment: AudioSegment, transcription_text: str) -
 def build_screen_capture_parts(
     screenshot: ConversationInlineDataPart,
     window_name: str | None,
-    capture_mode: Literal["explicit", "passive"],
+    capture_mode: Literal["always", "explicit", "passive"],
 ) -> tuple[ConversationRequestPart, ...]:
-    if capture_mode == "passive" and window_name:
+    if capture_mode == "always" and window_name:
+        context_text = (
+            f"Configured target window: {window_name}. "
+            "The attached image is a screenshot of that window for this turn because "
+            "always-attach screen capture is enabled."
+        )
+    elif capture_mode == "always":
+        context_text = (
+            "The attached image is a screenshot of the configured window for this turn "
+            "because always-attach screen capture is enabled."
+        )
+    elif capture_mode == "passive" and window_name:
         context_text = (
             f"Configured target window: {window_name}. "
             "The attached image is a screenshot of that window for this turn because the user "
@@ -319,11 +330,14 @@ def build_screen_capture_parts(
 def classify_screen_capture_request(
     user_text: str,
     trigger_phrases: tuple[str, ...],
+    always_attach: bool,
     passive_enabled: bool,
     passive_trigger_phrases: tuple[str, ...],
-) -> Literal["explicit", "passive"] | None:
+) -> Literal["always", "explicit", "passive"] | None:
     if _matches_screen_trigger(user_text, trigger_phrases):
         return "explicit"
+    if always_attach:
+        return "always"
     if passive_enabled and _matches_screen_trigger(user_text, passive_trigger_phrases):
         return "passive"
     return None

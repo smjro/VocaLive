@@ -396,6 +396,7 @@ class AppSettingsTests(unittest.TestCase):
             {
                 "VOCALIVE_SCREEN_CAPTURE_ENABLED": "true",
                 "VOCALIVE_SCREEN_WINDOW_NAME": "YouTube",
+                "VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED": "true",
                 "VOCALIVE_SCREEN_TRIGGER_PHRASES": "画面見て, screen please",
                 "VOCALIVE_SCREEN_PASSIVE_ENABLED": "true",
                 "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES": "この画面, 見えてる",
@@ -409,6 +410,7 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertTrue(settings.screen_capture.enabled)
         self.assertEqual(settings.screen_capture.window_name, "YouTube")
+        self.assertTrue(settings.screen_capture.always_attach)
         self.assertEqual(
             settings.screen_capture.trigger_phrases,
             ("画面見て", "screen please"),
@@ -567,6 +569,7 @@ class AppSettingsTests(unittest.TestCase):
             settings.screen_capture.trigger_phrases,
             DEFAULT_SCREEN_TRIGGER_PHRASES,
         )
+        self.assertFalse(settings.screen_capture.always_attach)
         self.assertFalse(settings.screen_capture.passive_enabled)
         self.assertEqual(
             settings.screen_capture.passive_trigger_phrases,
@@ -722,6 +725,7 @@ class AppSettingsTests(unittest.TestCase):
             "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION",
             "VOCALIVE_SCREEN_CAPTURE_ENABLED",
             "VOCALIVE_SCREEN_WINDOW_NAME",
+            "VOCALIVE_SCREEN_ALWAYS_ATTACH_ENABLED",
             "VOCALIVE_SCREEN_TRIGGER_PHRASES",
             "VOCALIVE_SCREEN_PASSIVE_ENABLED",
             "VOCALIVE_SCREEN_PASSIVE_TRIGGER_PHRASES",
