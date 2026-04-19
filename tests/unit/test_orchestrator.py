@@ -176,6 +176,40 @@ class StubScreenCaptureEngine(ScreenCaptureEngine):
         return ConversationInlineDataPart(mime_type="image/png", data=self.image_data)
 
 
+class BlockingScreenCaptureEngine(ScreenCaptureEngine):
+    name = "blocking-screen"
+
+    def __init__(
+        self,
+        release_event: asyncio.Event,
+        *,
+        image_data: bytes = b"png-bytes",
+    ) -> None:
+        self.release_event = release_event
+        self.image_data = image_data
+        self.calls: list[int] = []
+        self.capture_started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def capture(
+        self,
+        context: TurnContext,
+        cancellation: CancellationToken | None = None,
+    ) -> ConversationInlineDataPart:
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+        self.calls.append(context.turn_id)
+        self.capture_started.set()
+        try:
+            await self.release_event.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        if cancellation is not None:
+            cancellation.raise_if_cancelled()
+        return ConversationInlineDataPart(mime_type="image/png", data=self.image_data)
+
+
 class CancelledScreenCaptureEngine(ScreenCaptureEngine):
     name = "cancelled-screen"
 
@@ -1871,6 +1905,104 @@ class ConversationOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             await orchestrator.stop()
 
         self.assertEqual(screen_capture_engine.calls, [])
+        self.assertEqual(language_model.requests[0].current_user_parts, ())
+
+    async def test_live_audio_turn_starts_screen_capture_before_stt_finishes(self) -> None:
+        stt_release = asyncio.Event()
+        screen_release = asyncio.Event()
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = BlockingScreenCaptureEngine(screen_release)
+        stt_engine = BlockingSpeechToTextEngine(
+            release_event=stt_release,
+            text_resolver=lambda segment: "screen please",
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="YouTube",
+                    trigger_phrases=("screen please",),
+                ),
+            ),
+            stt_engine=stt_engine,
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(_raw_audio_segment(400.0))
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: stt_engine.blocking_transcribe_started.is_set())
+            await self._wait_for(lambda: screen_capture_engine.capture_started.is_set())
+            self.assertEqual(screen_capture_engine.calls, [1])
+            stt_release.set()
+            screen_release.set()
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(
+            language_model.requests[0].current_user_parts,
+            (
+                ConversationTextPart(
+                    text=(
+                        "Configured target window: YouTube. "
+                        "The attached image is a screenshot of that window for this turn."
+                    )
+                ),
+                ConversationInlineDataPart(mime_type="image/png", data=b"png-bytes"),
+            ),
+        )
+
+    async def test_live_audio_turn_discards_speculative_screen_capture_when_not_requested(self) -> None:
+        stt_release = asyncio.Event()
+        language_model = MultimodalCapturingLanguageModel()
+        screen_capture_engine = BlockingScreenCaptureEngine(asyncio.Event())
+        stt_engine = BlockingSpeechToTextEngine(
+            release_event=stt_release,
+            text_resolver=lambda segment: "hello",
+        )
+        orchestrator = ConversationOrchestrator(
+            settings=AppSettings(
+                session_id="test-session",
+                queue=QueueSettings(
+                    ingress_maxsize=4,
+                    overflow_strategy=QueueOverflowStrategy.DROP_OLDEST,
+                ),
+                screen_capture=ScreenCaptureSettings(
+                    enabled=True,
+                    window_name="YouTube",
+                    trigger_phrases=("screen please",),
+                ),
+            ),
+            stt_engine=stt_engine,
+            language_model=language_model,
+            tts_engine=MockTextToSpeechEngine(delay_seconds=0.0),
+            audio_output=MemoryAudioOutput(),
+            screen_capture_engine=screen_capture_engine,
+            metrics=InMemoryMetricsRecorder(),
+        )
+        await orchestrator.start()
+        try:
+            accepted = await orchestrator.submit_utterance(_raw_audio_segment(400.0))
+            self.assertTrue(accepted)
+            await self._wait_for(lambda: stt_engine.blocking_transcribe_started.is_set())
+            await self._wait_for(lambda: screen_capture_engine.capture_started.is_set())
+            stt_release.set()
+            await orchestrator.wait_for_idle()
+        finally:
+            await orchestrator.stop()
+
+        self.assertEqual(screen_capture_engine.calls, [1])
+        self.assertTrue(screen_capture_engine.cancelled.is_set())
         self.assertEqual(language_model.requests[0].current_user_parts, ())
 
     async def test_always_attach_adds_screen_capture_parts_without_trigger_phrase(self) -> None:

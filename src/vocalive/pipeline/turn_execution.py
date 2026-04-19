@@ -79,161 +79,171 @@ class TurnExecutor:
         cancellation: CancellationToken,
     ) -> None:
         segment = self._prepare_segment(segment)
-        turn_started_ms = monotonic_ms()
-        self._set_active_stage("stt")
-        with timed_stage(self._metrics, "stt", context):
-            transcription = await self._get_stt_engine().transcribe(
-                segment,
-                context,
-                cancellation=cancellation,
-            )
-        log_event(
-            self._logger,
-            "transcription_ready",
-            session_id=context.session_id,
-            turn_id=context.turn_id,
-            text=transcription.text,
-            stt_provider=transcription.provider,
-            audio_source=segment.source,
-            audio_source_label=segment.source_label,
-        )
-        self._emit_event(
-            ConversationEvent(
-                type="transcription_ready",
-                session_id=context.session_id,
-                turn_id=context.turn_id,
-                text=transcription.text,
-            )
-        )
-        self._mark_live_user_activity()
-        session_message_text = build_session_message_text(segment, transcription.text)
-        session = self._get_session()
-        if segment.source == "application_audio":
-            session.append_application_message(session_message_text)
-            if self._should_capture_application_audio_as_context(segment):
-                self._proactive.record_application_audio_observation(segment)
-                self._set_active_stage(None)
-                self._metrics.record_duration(
-                    stage="turn_total",
-                    duration_ms=monotonic_ms() - turn_started_ms,
-                    context=context,
-                )
-                return
-            current_user_parts = tuple()
-        else:
-            session.append_user_message(session_message_text)
-            if looks_like_explicit_request(transcription.text):
-                self._proactive.clear_observations()
-            reply_decision = self._decide_user_reply(
-                transcription.text,
-                segment,
-            )
-            if not reply_decision.should_reply:
-                log_event(
-                    self._logger,
-                    "response_suppressed",
-                    session_id=context.session_id,
-                    turn_id=context.turn_id,
-                    reason=reply_decision.reason,
-                    text=transcription.text,
-                    audio_source=segment.source,
-                )
-                self._proactive.record_microphone_observation(segment)
-                self._set_active_stage(None)
-                self._metrics.record_duration(
-                    stage="turn_total",
-                    duration_ms=monotonic_ms() - turn_started_ms,
-                    context=context,
-                )
-                return
-            current_user_parts = await self._screen_capture.maybe_capture_current_user_parts(
-                user_text=transcription.text,
-                context=context,
-                cancellation=cancellation,
-            )
-        transient_system_messages = tuple()
-        request_messages = None
-        if segment.source != "application_audio":
-            recent_audible_assistant_text = (
-                self._consume_recent_audible_assistant_context()
-            )
-            if recent_audible_assistant_text:
-                transient_system_messages = (
-                    build_recent_audible_assistant_instruction(),
-                )
-                request_messages = inject_recent_audible_assistant_message(
-                    build_request_messages(
-                        self._get_session().snapshot(),
-                        settings=self._settings,
-                        conversation_language=(
-                            transcription.language or self._settings.conversation.language
-                        ),
-                        transient_system_messages=transient_system_messages,
-                    ),
-                    recent_audible_assistant_text,
-                )
-        if request_messages is None:
-            request_messages = build_request_messages(
-                self._get_session().snapshot(),
-                settings=self._settings,
-                conversation_language=(
-                    transcription.language or self._settings.conversation.language
-                ),
-                transient_system_messages=transient_system_messages,
-            )
-
-        request = ConversationRequest(
-            context=context,
-            messages=request_messages,
-            current_user_parts=current_user_parts,
-        )
-        self._set_active_stage("llm")
-        with timed_stage(self._metrics, "llm", context):
-            response = await self._get_language_model().generate(
-                request,
-                cancellation=cancellation,
-            )
-        response = normalize_assistant_response(response)
-        log_event(
-            self._logger,
-            "response_ready",
-            session_id=context.session_id,
-            turn_id=context.turn_id,
-            text=response.text,
-            llm_provider=response.provider,
-        )
-        self._emit_event(
-            ConversationEvent(
-                type="response_ready",
-                session_id=context.session_id,
-                turn_id=context.turn_id,
-                text=response.text,
-            )
-        )
-        self._set_active_stage("tts")
-        await self._playback_runner.play_response(
-            response=response,
+        pending_screen_capture = self._screen_capture.start_pending_capture(
+            segment=segment,
             context=context,
             cancellation=cancellation,
         )
+        turn_started_ms = monotonic_ms()
+        try:
+            self._set_active_stage("stt")
+            with timed_stage(self._metrics, "stt", context):
+                transcription = await self._get_stt_engine().transcribe(
+                    segment,
+                    context,
+                    cancellation=cancellation,
+                )
+            log_event(
+                self._logger,
+                "transcription_ready",
+                session_id=context.session_id,
+                turn_id=context.turn_id,
+                text=transcription.text,
+                stt_provider=transcription.provider,
+                audio_source=segment.source,
+                audio_source_label=segment.source_label,
+            )
+            self._emit_event(
+                ConversationEvent(
+                    type="transcription_ready",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    text=transcription.text,
+                )
+            )
+            self._mark_live_user_activity()
+            session_message_text = build_session_message_text(segment, transcription.text)
+            session = self._get_session()
+            if segment.source == "application_audio":
+                session.append_application_message(session_message_text)
+                if self._should_capture_application_audio_as_context(segment):
+                    self._proactive.record_application_audio_observation(segment)
+                    self._set_active_stage(None)
+                    self._metrics.record_duration(
+                        stage="turn_total",
+                        duration_ms=monotonic_ms() - turn_started_ms,
+                        context=context,
+                    )
+                    return
+                current_user_parts = tuple()
+            else:
+                session.append_user_message(session_message_text)
+                if looks_like_explicit_request(transcription.text):
+                    self._proactive.clear_observations()
+                reply_decision = self._decide_user_reply(
+                    transcription.text,
+                    segment,
+                )
+                if not reply_decision.should_reply:
+                    log_event(
+                        self._logger,
+                        "response_suppressed",
+                        session_id=context.session_id,
+                        turn_id=context.turn_id,
+                        reason=reply_decision.reason,
+                        text=transcription.text,
+                        audio_source=segment.source,
+                    )
+                    self._proactive.record_microphone_observation(segment)
+                    self._set_active_stage(None)
+                    self._metrics.record_duration(
+                        stage="turn_total",
+                        duration_ms=monotonic_ms() - turn_started_ms,
+                        context=context,
+                    )
+                    return
+                current_user_parts = await self._screen_capture.maybe_capture_current_user_parts(
+                    user_text=transcription.text,
+                    context=context,
+                    cancellation=cancellation,
+                    pending_capture=pending_screen_capture,
+                )
+                pending_screen_capture = None
+            transient_system_messages = tuple()
+            request_messages = None
+            if segment.source != "application_audio":
+                recent_audible_assistant_text = (
+                    self._consume_recent_audible_assistant_context()
+                )
+                if recent_audible_assistant_text:
+                    transient_system_messages = (
+                        build_recent_audible_assistant_instruction(),
+                    )
+                    request_messages = inject_recent_audible_assistant_message(
+                        build_request_messages(
+                            self._get_session().snapshot(),
+                            settings=self._settings,
+                            conversation_language=(
+                                transcription.language or self._settings.conversation.language
+                            ),
+                            transient_system_messages=transient_system_messages,
+                        ),
+                        recent_audible_assistant_text,
+                    )
+            if request_messages is None:
+                request_messages = build_request_messages(
+                    self._get_session().snapshot(),
+                    settings=self._settings,
+                    conversation_language=(
+                        transcription.language or self._settings.conversation.language
+                    ),
+                    transient_system_messages=transient_system_messages,
+                )
 
-        committed_at_ms = monotonic_ms()
-        self._get_session().append_assistant_message(response.text)
-        self._set_last_assistant_response_ms(committed_at_ms)
-        self._emit_event(
-            ConversationEvent(
-                type="assistant_message_committed",
+            request = ConversationRequest(
+                context=context,
+                messages=request_messages,
+                current_user_parts=current_user_parts,
+            )
+            self._set_active_stage("llm")
+            with timed_stage(self._metrics, "llm", context):
+                response = await self._get_language_model().generate(
+                    request,
+                    cancellation=cancellation,
+                )
+            response = normalize_assistant_response(response)
+            log_event(
+                self._logger,
+                "response_ready",
                 session_id=context.session_id,
                 turn_id=context.turn_id,
                 text=response.text,
+                llm_provider=response.provider,
             )
-        )
-        self._set_active_stage(None)
-        self._metrics.record_duration(
-            stage="turn_total",
-            duration_ms=committed_at_ms - turn_started_ms,
-            context=context,
-        )
+            self._emit_event(
+                ConversationEvent(
+                    type="response_ready",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    text=response.text,
+                )
+            )
+            self._set_active_stage("tts")
+            await self._playback_runner.play_response(
+                response=response,
+                context=context,
+                cancellation=cancellation,
+            )
+
+            committed_at_ms = monotonic_ms()
+            self._get_session().append_assistant_message(response.text)
+            self._set_last_assistant_response_ms(committed_at_ms)
+            self._emit_event(
+                ConversationEvent(
+                    type="assistant_message_committed",
+                    session_id=context.session_id,
+                    turn_id=context.turn_id,
+                    text=response.text,
+                )
+            )
+            self._set_active_stage(None)
+            self._metrics.record_duration(
+                stage="turn_total",
+                duration_ms=committed_at_ms - turn_started_ms,
+                context=context,
+            )
+        finally:
+            await self._screen_capture.discard_pending_capture(pending_screen_capture)
 
     async def execute_proactive_turn(
         self,

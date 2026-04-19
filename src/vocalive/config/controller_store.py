@@ -47,11 +47,11 @@ class ControllerConfigStore:
         raw_values = payload.get("values", {})
         if not isinstance(raw_values, dict):
             raise ValueError(f"Controller config values must be a JSON object: {self.path}")
-        normalized = normalize_controller_values(
-            {str(key): _coerce_raw_value(value) for key, value in raw_values.items()}
-        )
+        coerced = {str(key): _coerce_raw_value(value) for key, value in raw_values.items()}
+        repaired = _repair_mojibake_values(coerced)
+        normalized = normalize_controller_values(repaired)
         sanitized = sanitize_persisted_controller_values(normalized)
-        if sanitized != normalized:
+        if repaired != coerced or sanitized != normalized:
             self.save_values(sanitized)
         return ControllerConfig(version=CONTROLLER_CONFIG_VERSION, values=sanitized)
 
@@ -59,7 +59,7 @@ class ControllerConfigStore:
         return dict(self.load().values)
 
     def save_values(self, values: dict[str, str | None]) -> dict[str, str | None]:
-        normalized = sanitize_persisted_controller_values(values)
+        normalized = sanitize_persisted_controller_values(_repair_mojibake_values(values))
         payload = {
             "version": CONTROLLER_CONFIG_VERSION,
             "values": {
@@ -88,3 +88,22 @@ def _coerce_raw_value(value: Any) -> str | None:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _repair_mojibake_values(values: dict[str, str | None]) -> dict[str, str | None]:
+    return {
+        env_name: _repair_mojibake_value(value)
+        for env_name, value in values.items()
+    }
+
+
+def _repair_mojibake_value(value: str | None) -> str | None:
+    if not value:
+        return value
+    try:
+        repaired = value.encode("cp932").decode("utf-8")
+    except UnicodeError:
+        return value
+    if repaired == value:
+        return value
+    return repaired

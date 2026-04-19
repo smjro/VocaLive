@@ -133,6 +133,55 @@ class ControllerConfigStoreTests(unittest.TestCase):
         self.assertIsNone(loaded["VOCALIVE_GEMINI_API_KEY"])
         self.assertNotIn("VOCALIVE_GEMINI_API_KEY", payload["values"])
 
+    def test_load_repairs_mojibake_japanese_values_from_disk(self) -> None:
+        def mojibake(value: str) -> str:
+            return value.encode("utf-8").decode("cp932")
+
+        with TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "controller-config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "values": {
+                            "VOCALIVE_OVERLAY_CHARACTER_NAME": mojibake("コハク"),
+                            "VOCALIVE_SCREEN_TRIGGER_PHRASES": mojibake(
+                                "画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て"
+                            ),
+                            "VOCALIVE_USER_NAME": mojibake("ましま"),
+                            "VOCALIVE_GEMINI_SYSTEM_INSTRUCTION": mojibake(
+                                "You are VocaLive's conversation character, and your name is コハク."
+                            ),
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            store = ControllerConfigStore(path)
+
+            loaded = store.load_values()
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(loaded["VOCALIVE_OVERLAY_CHARACTER_NAME"], "コハク")
+        self.assertEqual(
+            loaded["VOCALIVE_SCREEN_TRIGGER_PHRASES"],
+            "画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て",
+        )
+        self.assertEqual(loaded["VOCALIVE_USER_NAME"], "ましま")
+        self.assertIn("your name is コハク.", loaded["VOCALIVE_GEMINI_SYSTEM_INSTRUCTION"])
+        self.assertEqual(payload["values"]["VOCALIVE_OVERLAY_CHARACTER_NAME"], "コハク")
+        self.assertEqual(
+            payload["values"]["VOCALIVE_SCREEN_TRIGGER_PHRASES"],
+            "画面みて,画面見て,画面をみて,画面を見て,スクショみて,スクショ見て",
+        )
+        self.assertEqual(payload["values"]["VOCALIVE_USER_NAME"], "ましま")
+        self.assertIn(
+            "your name is コハク.",
+            payload["values"]["VOCALIVE_GEMINI_SYSTEM_INSTRUCTION"],
+        )
+
 
 class ControllerRuntimeManagerTests(unittest.TestCase):
     def test_start_and_stop_runtime_transitions(self) -> None:
